@@ -21,7 +21,7 @@
 - Logs carry metadata only (group, message kind, length, decision) — never message text or sender names. whatsmeow's own logger at WARN or above.
 - Delimiters, exactly: `===== GROUP: <name> =====`, `--- Sun 25 Oct ---`, `[HH:MM] `, `===== END OF MESSAGES =====`, `--- feedbridge health ---`.
 - Files: config, `webhook.url`, `webhook.secret` mode 0600 owner `feedbridge`; data in `/var/lib/feedbridge`; lock file `/var/lib/feedbridge/lock` (the directory of `store.path`).
-- Deps are pinned in `go.sum`; add no dependency beyond the four listed above (and their transitive deps).
+- Deps are pinned in `go.sum`; add no dependency beyond these four (and their transitive deps): `go.mau.fi/whatsmeow`, `modernc.org/sqlite`, `github.com/BurntSushi/toml`, `github.com/mdp/qrterminal/v3`.
 
 ## Review Focus
 

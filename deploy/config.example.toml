@@ -1,0 +1,24 @@
+# /etc/feedbridge/config.toml — mode 0600, owner feedbridge.
+# Secrets are never put here: they live in the two files named under [feed].
+
+[whatsapp]
+# Group JIDs from `feedbridge --list-groups`. Placeholders: replace both.
+# May be left empty (groups = []) until after --link and --list-groups.
+groups = ["REPLACE-WITH-GROUP-1-JID@g.us", "REPLACE-WITH-GROUP-2-JID@g.us"]
+# whatsmeow session store; treat as a credential.
+session_db = "/var/lib/feedbridge/session.db"
+
+[store]
+path = "/var/lib/feedbridge/messages.db"
+retention_hours = 48
+
+[feed]
+# Longest wait for queued messages before sending.
+sync_timeout = "5m"
+max_message_chars = 500
+# UTF-8 bytes x 1000; stays under Apps Script's 200 KB email body limit.
+max_feed_kb = 180
+# The Apps Script web app /exec URL; treat as a secret.
+webhook_url_file = "/etc/feedbridge/webhook.url"
+# `openssl rand -hex 32`; must match the script property FEED_SECRET.
+secret_file = "/etc/feedbridge/webhook.secret"
