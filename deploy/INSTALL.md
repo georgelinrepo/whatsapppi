@@ -4,6 +4,19 @@ These steps cover spec §One-time setup 4–7. Steps 1–3 (SIM, second WhatsApp
 account, joining the groups) come first; step 8 is the one-week soak test
 (acceptance test 23), before relying on the feed.
 
+## Quick path
+
+Two scripts do the `sudo` work in the sections below. Read them first.
+
+```sh
+sudo deploy/setup.sh                          # sections 2-4; prints the secret for Apps Script, asks for the /exec URL
+sudo -u feedbridge feedbridge --link          # section 5: scan the QR in the monitoring account
+sudo -u feedbridge feedbridge --list-groups   # find the two group JIDs
+sudo deploy/start.sh <JID1> <JID2>            # writes the JIDs, enables the timer, runs once
+```
+
+Then do section 7 on the phone. The sections below are the same steps by hand.
+
 ## 1. Apps Script (setup step 4)
 
 Create the script from the spec's Appendix and deploy it as a web app
