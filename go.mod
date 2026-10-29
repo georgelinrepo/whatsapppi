@@ -3,6 +3,7 @@ module feedbridge
 go 1.27.3
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	go.mau.fi/whatsmeow v0.0.0-20261029193418-2fc844fe1693
 	modernc.org/sqlite v1.61.0
 )
