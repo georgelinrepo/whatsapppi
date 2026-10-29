@@ -130,7 +130,8 @@ func TestFromMessage(t *testing.T) {
 				t.Fatalf("chat/storedat: %+v", m)
 			}
 			if op.Kind == OpEdit {
-				if m.ID != "OLD" || !m.Edited || !m.TS.Equal(t0) || !m.StoredAt.Equal(t0) {
+				// stored_at is when the bridge saw the edit (spec line 64).
+				if m.ID != "OLD" || !m.Edited || !m.TS.Equal(t0) || !m.StoredAt.Equal(filter.Now()) {
 					t.Fatalf("edit fields: %+v", m)
 				}
 			} else if m.ID != "ID1" || !m.TS.Equal(tc.evt.Info.Timestamp) {
@@ -228,5 +229,41 @@ func TestApply(t *testing.T) {
 	}
 	if err := Apply(s, Op{Kind: 99}); err == nil {
 		t.Fatal("want error for unknown op")
+	}
+}
+
+// A live edit of an already-sent message, with an edit time before
+// last_sent_at, must still reach the next feed.
+func TestLateEditReachesNextFeed(t *testing.T) {
+	s, err := store.Open(filepath.Join(t.TempDir(), "messages.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a := store.Message{ID: "A", Chat: group.String(), Sender: "S", TS: t0, StoredAt: t0, Kind: "text", Text: "orig"}
+	if err := Apply(s, Op{Kind: OpInsert, Msg: a}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CommitSent(t0.Add(time.Hour), []string{"A"}); err != nil {
+		t.Fatal(err)
+	}
+	edit := ev(group, "S", t0.Add(30*time.Minute), &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Key: &waCommon.MessageKey{ID: proto.String("A")}, Type: waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
+		EditedMessage: text("fixed")}})
+	f := filter
+	f.Now = func() time.Time { return t0.Add(2 * time.Hour) }
+	op, ok := FromMessage(edit, f, names{})
+	if !ok || op.Kind != OpEdit {
+		t.Fatalf("op=%+v ok=%v", op, ok)
+	}
+	if err := Apply(s, op); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Pending(t0.Add(3 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) != 1 || p[0].ID != "A" || p[0].Text != "fixed" || !p[0].Edited || !p[0].TS.Equal(t0) {
+		t.Fatalf("pending: %+v", p)
 	}
 }

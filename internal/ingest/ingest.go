@@ -76,7 +76,7 @@ func FromMessage(evt *events.Message, f Filter, n Names) (Op, bool) {
 				return Op{}, false
 			}
 			m := build(evt, n, kind, body, pm.GetEditedMessage())
-			m.ID, m.Edited, m.TS, m.StoredAt = id, true, ts, ts
+			m.ID, m.Edited, m.TS, m.StoredAt = id, true, ts, now // stored_at: when the bridge saw the edit
 			return Op{Kind: OpEdit, Msg: m}, true
 		}
 		return Op{}, false
@@ -92,7 +92,7 @@ func FromMessage(evt *events.Message, f Filter, n Names) (Op, bool) {
 	m := build(evt, n, kind, body, msg)
 	if evt.IsEdit {
 		// ParseWebMessage rewrites MESSAGE_EDIT: Info.ID is the target's ID.
-		m.Edited, m.TS, m.StoredAt = true, ts, ts
+		m.Edited, m.TS, m.StoredAt = true, ts, now
 		return Op{Kind: OpEdit, Msg: m}, true
 	}
 	m.StoredAt = now

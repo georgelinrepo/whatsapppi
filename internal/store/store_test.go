@@ -73,9 +73,13 @@ func TestEditBeforeOriginal(t *testing.T) {
 
 func TestEditOfPurgedInsertsRow(t *testing.T) {
 	s := open(t)
-	s.ApplyEdit(msg("B", "x", t0))
-	ms := pending(t, s, t0)
-	if len(ms) != 1 || !ms[0].TS.Equal(t0) || !ms[0].Edited {
+	e := msg("B", "x", t0) // TS = edit time
+	e.StoredAt = t0.Add(time.Hour)
+	if err := s.ApplyEdit(e); err != nil {
+		t.Fatal(err)
+	}
+	ms := pending(t, s, t0.Add(time.Hour))
+	if len(ms) != 1 || !ms[0].TS.Equal(t0) || !ms[0].StoredAt.Equal(t0.Add(time.Hour)) || !ms[0].Edited {
 		t.Fatalf("got %+v", ms)
 	}
 }
