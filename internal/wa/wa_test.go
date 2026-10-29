@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,5 +172,48 @@ func TestLoggerRedactsStrings(t *testing.T) {
 	}
 	if !strings.Contains(out, "failed 7: bad mac") || !strings.Contains(out, "level=WARN") || !strings.Contains(out, "module=Client") {
 		t.Fatalf("missing warn: %s", out)
+	}
+}
+
+func TestCloseWaitsForHistorySync(t *testing.T) {
+	c, _ := newTestClient(t)
+	started := make(chan struct{})
+	var done atomic.Bool
+	c.onHistory = func(*events.HistorySync) {
+		close(started)
+		time.Sleep(200 * time.Millisecond)
+		done.Store(true)
+	}
+	go c.handle(&events.HistorySync{})
+	<-started
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !done.Load() {
+		t.Fatal("Close returned while history sync was still being applied")
+	}
+	// After Close, further history syncs are dropped, not applied.
+	c.onHistory = func(*events.HistorySync) { t.Error("history sync handled after Close") }
+	c.handle(&events.HistorySync{})
+}
+
+func TestCloseGivesUpOnSlowHistorySync(t *testing.T) {
+	c, _ := newTestClient(t)
+	var buf bytes.Buffer
+	c.log = slog.New(slog.NewTextHandler(&buf, nil))
+	c.closeWait = 20 * time.Millisecond
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	c.onHistory = func(*events.HistorySync) { close(started); <-release }
+	go c.handle(&events.HistorySync{})
+	<-started
+	t0 := time.Now()
+	c.Close()
+	if time.Since(t0) > time.Second {
+		t.Fatal("Close did not give up after closeWait")
+	}
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "pending=1") {
+		t.Fatalf("log: %s", buf.String())
 	}
 }

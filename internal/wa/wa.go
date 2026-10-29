@@ -68,6 +68,15 @@ type Client struct {
 
 	mu    sync.Mutex
 	start time.Time // when Connect began; the sync budget runs from here
+
+	// History syncs are downloaded and applied on whatsmeow's own goroutine,
+	// which can outlive Disconnect; Close waits for them (up to closeWait).
+	onHistory   func(*events.HistorySync) // default c.handleHistory; replaced in tests
+	closeWait   time.Duration
+	histMu      sync.Mutex
+	histClosed  bool
+	histWG      sync.WaitGroup
+	histPending atomic.Int64
 }
 
 var _ run.WhatsApp = (*Client)(nil)
@@ -111,13 +120,32 @@ func New(ctx context.Context, cfg config.Config, st *fbstore.Store) (*Client, er
 		synced:      make(chan struct{}),
 		connected:   make(chan struct{}),
 		fatal:       make(chan struct{}),
+		closeWait:   30 * time.Second,
 	}
+	c.onHistory = c.handleHistory
 	cli.AddEventHandler(c.handle)
 	return c, nil
 }
 
-// Close releases the session database. Call after Disconnect.
-func (c *Client) Close() error { return c.container.Close() }
+// Close releases the session database. Call after Disconnect, and before
+// closing the message store: it first waits up to closeWait for any history
+// sync still being applied, and drops any that arrive later.
+func (c *Client) Close() error {
+	c.histMu.Lock()
+	c.histClosed = true
+	c.histMu.Unlock()
+	done := make(chan struct{})
+	go func() { c.histWG.Wait(); close(done) }()
+	t := time.NewTimer(c.closeWait)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		c.log.Warn("history sync still running at close", "pending", c.histPending.Load(),
+			"wait", c.closeWait)
+	}
+	return c.container.Close()
+}
 
 func (c *Client) handle(evt any) {
 	switch e := evt.(type) {
@@ -126,11 +154,17 @@ func (c *Client) handle(evt any) {
 			c.apply(op)
 		}
 	case *events.HistorySync:
-		ops := ingest.FromHistory(e, c.filter, c.names, c.cli.ParseWebMessage)
-		for _, op := range ops {
-			c.apply(op)
+		c.histMu.Lock()
+		if c.histClosed {
+			c.histMu.Unlock()
+			c.log.Warn("history sync after close dropped", "conversations", len(e.Data.GetConversations()))
+			return
 		}
-		c.log.Info("history sync", "conversations", len(e.Data.GetConversations()), "ops", len(ops))
+		c.histWG.Add(1)
+		c.histPending.Add(1)
+		c.histMu.Unlock()
+		defer func() { c.histPending.Add(-1); c.histWG.Done() }()
+		c.onHistory(e)
 	case *events.OfflineSyncCompleted:
 		c.log.Info("offline sync completed", "count", e.Count)
 		c.syncedOnce.Do(func() { close(c.synced) })
@@ -164,6 +198,14 @@ func (c *Client) handle(evt any) {
 	case *events.StreamReplaced:
 		c.setFatal(errors.New("session replaced by another connection"))
 	}
+}
+
+func (c *Client) handleHistory(e *events.HistorySync) {
+	ops := ingest.FromHistory(e, c.filter, c.names, c.cli.ParseWebMessage)
+	for _, op := range ops {
+		c.apply(op)
+	}
+	c.log.Info("history sync", "conversations", len(e.Data.GetConversations()), "ops", len(ops))
 }
 
 func (c *Client) apply(op ingest.Op) {
