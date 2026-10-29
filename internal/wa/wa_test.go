@@ -89,7 +89,7 @@ func TestHandlerCountsAndSync(t *testing.T) {
 	if time.Since(start) > time.Second {
 		t.Fatalf("WaitSynced did not return immediately after OfflineSyncCompleted")
 	}
-	if !res.Synced || res.New != 1 || res.StoreErrors != 0 {
+	if !res.Synced || res.New != 1 || res.StoreErrors != 0 || res.Err != nil {
 		t.Fatalf("got %+v", res)
 	}
 	msgs, err := st.Pending(time.Now().Add(time.Minute))
@@ -101,8 +101,29 @@ func TestHandlerCountsAndSync(t *testing.T) {
 func TestWaitSyncedTimesOut(t *testing.T) {
 	c, _ := newTestClient(t)
 	res := c.WaitSynced(context.Background(), 20*time.Millisecond)
-	if res.Synced {
-		t.Fatalf("want not synced, got %+v", res)
+	if res.Synced || res.Err != nil {
+		t.Fatalf("want not synced, no error, got %+v", res)
+	}
+}
+
+func TestWaitSyncedReturnsFatalErr(t *testing.T) {
+	for _, tc := range []struct {
+		evt  any
+		want error
+	}{
+		{&events.LoggedOut{Reason: events.ConnectFailureLoggedOut}, run.ErrLoggedOut},
+		{&events.TemporaryBan{}, run.ErrBanned},
+	} {
+		c, _ := newTestClient(t)
+		c.handle(tc.evt)
+		start := time.Now()
+		res := c.WaitSynced(context.Background(), time.Hour)
+		if time.Since(start) > time.Second {
+			t.Fatalf("%T: WaitSynced did not return on fatal", tc.evt)
+		}
+		if res.Synced || !errors.Is(res.Err, tc.want) {
+			t.Errorf("%T: got %+v, want Err %v", tc.evt, res, tc.want)
+		}
 	}
 }
 

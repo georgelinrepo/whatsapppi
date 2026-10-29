@@ -221,7 +221,8 @@ func (c *Client) Connect(ctx context.Context) error {
 
 // WaitSynced waits for WhatsApp to finish delivering queued messages. The
 // timeout counts from the start of Connect, so connecting and syncing share
-// one feed.sync_timeout budget.
+// one feed.sync_timeout budget. Err is set (run.ErrLoggedOut, run.ErrBanned
+// or another fatal error) when the session became unusable while waiting.
 func (c *Client) WaitSynced(ctx context.Context, timeout time.Duration) run.SyncResult {
 	c.mu.Lock()
 	start := c.start
@@ -232,10 +233,12 @@ func (c *Client) WaitSynced(ctx context.Context, timeout time.Duration) run.Sync
 	t := time.NewTimer(time.Until(start.Add(timeout)))
 	defer t.Stop()
 	synced := false
+	var err error
 	select {
 	case <-c.synced:
 		synced = true
 	case <-c.fatal:
+		err = c.fatalErr
 	case <-t.C:
 	case <-ctx.Done():
 	}
@@ -243,6 +246,7 @@ func (c *Client) WaitSynced(ctx context.Context, timeout time.Duration) run.Sync
 		Synced:      synced,
 		New:         int(c.applied.Load()),
 		StoreErrors: int(c.storeErrs.Load()),
+		Err:         err,
 	}
 }
 

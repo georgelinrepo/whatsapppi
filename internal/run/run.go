@@ -18,6 +18,7 @@ type SyncResult struct {
 	Synced      bool
 	New         int
 	StoreErrors int
+	Err         error // ErrLoggedOut, ErrBanned or another fatal error during sync
 }
 
 type WhatsApp interface {
@@ -55,27 +56,27 @@ func Run(ctx context.Context, d Deps) error {
 	start := time.Now()
 	connectErr := d.WA.Connect(ctx)
 	connected := connectErr == nil
+	available := connected // WhatsApp usable for group names
 	if connected {
 		log.Info("connect", "ok", true, "ms", time.Since(start).Milliseconds())
 		t := time.Now()
 		res := d.WA.WaitSynced(ctx, cfg.SyncTimeout)
-		h.SyncedAt = d.Now()
 		h.New, h.StoreErrors = res.New, res.StoreErrors
-		h.Status = "partial"
-		if res.Synced {
-			h.Status = "synced"
+		if res.Err != nil {
+			available = false
+			h.Status, h.Reason = "not_synced", reason(res.Err)
+			log.Warn("sync", "status", h.Status, "reason", h.Reason, "new", res.New,
+				"store_errors", res.StoreErrors, "ms", time.Since(t).Milliseconds())
+		} else {
+			h.SyncedAt = d.Now()
+			h.Status = "partial"
+			if res.Synced {
+				h.Status = "synced"
+			}
+			log.Info("sync", "status", h.Status, "new", res.New, "store_errors", res.StoreErrors, "ms", time.Since(t).Milliseconds())
 		}
-		log.Info("sync", "status", h.Status, "new", res.New, "store_errors", res.StoreErrors, "ms", time.Since(t).Milliseconds())
 	} else {
-		h.Status = "not_synced"
-		switch {
-		case errors.Is(connectErr, ErrLoggedOut):
-			h.Reason = "LOGGED OUT"
-		case errors.Is(connectErr, ErrBanned):
-			h.Reason = "BANNED"
-		default:
-			h.Reason = sanitize.Line(connectErr.Error())
-		}
+		h.Status, h.Reason = "not_synced", reason(connectErr)
 		log.Warn("connect", "ok", false, "reason", h.Reason)
 	}
 
@@ -84,7 +85,7 @@ func Run(ctx context.Context, d Deps) error {
 	for _, jid := range cfg.Groups {
 		g := feed.Group{JID: jid, Name: jid}
 		found := true
-		if connected {
+		if available {
 			name, err := d.WA.GroupName(ctx, jid)
 			switch {
 			case errors.Is(err, ErrNotMember):
@@ -156,4 +157,15 @@ func Run(ctx context.Context, d Deps) error {
 	}
 	log.Info("commit", "ids", len(ids))
 	return nil
+}
+
+// reason is the health-line text for an unavailable WhatsApp.
+func reason(err error) string {
+	switch {
+	case errors.Is(err, ErrLoggedOut):
+		return "LOGGED OUT"
+	case errors.Is(err, ErrBanned):
+		return "BANNED"
+	}
+	return sanitize.Line(err.Error())
 }

@@ -24,6 +24,7 @@ type fakeWA struct {
 	st         *store.Store
 	connectErr error
 	synced     bool
+	syncErr    error
 	msgs       []store.Message
 	names      map[string]error
 	calls      []string
@@ -40,7 +41,7 @@ func (f *fakeWA) WaitSynced(ctx context.Context, d time.Duration) SyncResult {
 			panic(err)
 		}
 	}
-	return SyncResult{Synced: f.synced, New: len(f.msgs)}
+	return SyncResult{Synced: f.synced, New: len(f.msgs), Err: f.syncErr}
 }
 func (f *fakeWA) GroupName(ctx context.Context, jid string) (string, error) {
 	f.calls = append(f.calls, "name")
@@ -209,5 +210,31 @@ func TestRunPayload(t *testing.T) {
 	p := (*sent)[0]
 	if p.ID != "2026-10-26T06:35:00Z" || p.Date != "26 Oct 2026" || p.Secret != "s3cret" {
 		t.Errorf("payload = %q %q", p.ID, p.Date)
+	}
+}
+
+func TestRunFatalDuringSync(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{ErrLoggedOut, "NOT SYNCED — LOGGED OUT"},
+		{ErrBanned, "NOT SYNCED — BANNED"},
+	} {
+		d, wa, sent := setup(t)
+		wa.synced, wa.syncErr = false, tc.err
+		if err := Run(context.Background(), d); err != nil {
+			t.Fatal(err)
+		}
+		txt := (*sent)[0].Text
+		if !strings.Contains(txt, tc.want) || strings.Contains(txt, "PARTIAL") {
+			t.Errorf("%v: text:\n%s", tc.err, txt)
+		}
+		if !strings.Contains(txt, "hello one") {
+			t.Errorf("%v: stored messages missing:\n%s", tc.err, txt)
+		}
+		if got := strings.Join(wa.calls, ","); got != "connect,wait,disconnect,send" {
+			t.Errorf("%v: calls = %s", tc.err, got)
+		}
 	}
 }
