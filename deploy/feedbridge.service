@@ -7,6 +7,7 @@ After=network-online.target time-sync.target
 Type=oneshot
 TimeoutStartSec=30min
 User=feedbridge
+UMask=0077
 ExecStart=/usr/local/bin/feedbridge --run
 NoNewPrivileges=yes
 ProtectSystem=strict

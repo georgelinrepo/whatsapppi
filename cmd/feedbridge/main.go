@@ -40,6 +40,9 @@ func main() {
 }
 
 func realMain(args []string, stdout, stderr io.Writer) int {
+	// Databases, WAL files and the lock file must be private (mode 600),
+	// whoever starts us and with whatever umask.
+	syscall.Umask(0o077)
 	fs := flag.NewFlagSet("feedbridge", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", "/etc/feedbridge/config.toml", "config file")
@@ -192,4 +195,4 @@ func (f failedWA) WaitSynced(context.Context, time.Duration) run.SyncResult {
 	return run.SyncResult{}
 }
 func (f failedWA) GroupName(context.Context, string) (string, error) { return "", f.err }
-func (f failedWA) Disconnect()                                        {}
+func (f failedWA) Disconnect()                                       {}

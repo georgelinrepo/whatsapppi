@@ -34,6 +34,7 @@ func TestServiceUnit(t *testing.T) {
 		"RestrictAddressFamilies=AF_INET AF_INET6",
 		"CapabilityBoundingSet=",
 		"MemoryMax=256M",
+		"UMask=0077",
 		"Wants=network-online.target time-sync.target",
 		"After=network-online.target time-sync.target",
 	} {

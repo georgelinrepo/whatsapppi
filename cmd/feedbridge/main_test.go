@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"feedbridge/internal/lock"
@@ -90,5 +91,22 @@ func TestListGroupsUnlinked(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "not linked") {
 		t.Fatalf("message %q", errb.String())
+	}
+}
+
+func TestDatabasesCreatedPrivate(t *testing.T) {
+	old := syscall.Umask(0o022) // a typical login umask
+	defer syscall.Umask(old)
+	cfg, dir := writeConfig(t, "")
+	var out, errb bytes.Buffer
+	realMain([]string{"--list-groups", "--config", cfg}, &out, &errb)
+	for _, name := range []string{"messages.db", "session.db"} {
+		fi, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := fi.Mode().Perm(); perm != 0o600 {
+			t.Errorf("%s: mode %o, want 600", name, perm)
+		}
 	}
 }
