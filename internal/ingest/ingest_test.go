@@ -81,6 +81,11 @@ func TestFromMessage(t *testing.T) {
 		{name: "edit of old message", evt: ev(group, "S", t0, &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
 			Key: &waCommon.MessageKey{ID: proto.String("OLD")}, Type: waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(),
 			EditedMessage: text("new\ntext")}}), kind: OpEdit, ok: true, mkind: "text", text: "new / text", sender: "S"},
+		{name: "parsed history edit", evt: func() *events.Message {
+			e := ev(group, "S", t0, text("fixed"))
+			e.Info.ID, e.IsEdit = "OLD", true
+			return e
+		}(), kind: OpEdit, ok: true, mkind: "text", text: "fixed", sender: "S"},
 		{name: "document no caption", evt: ev(group, "S", t0, &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{FileName: proto.String("Trip form.pdf")}}), kind: OpInsert, ok: true, mkind: "media", text: "[document: Trip form.pdf]", sender: "S"},
 		{name: "image caption", evt: ev(group, "S", t0, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{Caption: proto.String("look")}}), kind: OpInsert, ok: true, mkind: "caption", text: "[image] look", sender: "S"},
 		{name: "image", evt: ev(group, "S", t0, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{}}), kind: OpInsert, ok: true, mkind: "media", text: "[image]", sender: "S"},
@@ -146,18 +151,43 @@ func TestFromHistory(t *testing.T) {
 	web := func(id string) *waHistorySync.HistorySyncMsg {
 		return &waHistorySync.HistorySyncMsg{Message: &waWeb.WebMessageInfo{Key: &waCommon.MessageKey{ID: proto.String(id)}}}
 	}
-	h := &events.HistorySync{Data: &waHistorySync.HistorySync{Conversations: []*waHistorySync.Conversation{
-		{ID: proto.String(group.String()), Messages: []*waHistorySync.HistorySyncMsg{web("A"), web("B")}},
-		{ID: proto.String(other.String()), Messages: []*waHistorySync.HistorySyncMsg{web("C")}},
-	}}}
+	conv := func(chat types.JID, ids ...string) *waHistorySync.Conversation {
+		c := &waHistorySync.Conversation{ID: proto.String(chat.String())}
+		for _, id := range ids {
+			c.Messages = append(c.Messages, web(id))
+		}
+		return c
+	}
 	parse := func(chat types.JID, m *waWeb.WebMessageInfo) (*events.Message, error) {
-		e := ev(chat, "S", t0, text("m"+m.GetKey().GetID()))
-		e.Info.ID = m.GetKey().GetID()
+		id := m.GetKey().GetID()
+		switch id {
+		case "E": // parsed edit of A: ID is the target
+			e := ev(chat, "S", t0.Add(2*time.Minute), text("edited"))
+			e.Info.ID, e.IsEdit = "A", true
+			return e, nil
+		case "R": // revoke of A
+			return ev(chat, "S", t0.Add(3*time.Minute), &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+				Key: &waCommon.MessageKey{ID: proto.String("A")}, Type: waE2E.ProtocolMessage_REVOKE.Enum()}}), nil
+		}
+		e := ev(chat, "S", t0, text("m"+id))
+		e.Info.ID = id
 		return e, nil
 	}
+	h := &events.HistorySync{Data: &waHistorySync.HistorySync{Conversations: []*waHistorySync.Conversation{
+		conv(group, "A", "B", "E"),
+		conv(other, "C"),
+	}}}
 	ops := FromHistory(h, filter, names{}, parse)
-	if len(ops) != 2 || ops[0].Msg.ID != "A" || ops[1].Msg.ID != "B" {
+	if len(ops) != 3 || ops[0].Msg.ID != "A" || ops[1].Msg.ID != "B" ||
+		ops[2].Kind != OpEdit || ops[2].Msg.ID != "A" || ops[2].Msg.Text != "edited" {
 		t.Fatalf("%+v", ops)
+	}
+
+	// Newest-first batch: revoke must still come after its original.
+	h = &events.HistorySync{Data: &waHistorySync.HistorySync{Conversations: []*waHistorySync.Conversation{conv(group, "R", "A")}}}
+	ops = FromHistory(h, filter, names{}, parse)
+	if len(ops) != 2 || ops[0].Kind != OpInsert || ops[0].Msg.ID != "A" || ops[1].Kind != OpDelete || ops[1].Msg.ID != "A" {
+		t.Fatalf("order: %+v", ops)
 	}
 }
 
@@ -167,17 +197,34 @@ func TestApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	until := t0.Add(time.Hour)
+	pending := func() []store.Message {
+		p, err := s.Pending(until)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
 	m := store.Message{ID: "X", Chat: group.String(), Sender: "S", TS: t0, StoredAt: t0, Kind: "text", Text: "one"}
 	if err := Apply(s, Op{Kind: OpInsert, Msg: m}); err != nil {
 		t.Fatal(err)
+	}
+	if p := pending(); len(p) != 1 || p[0].Text != "one" {
+		t.Fatalf("after insert: %+v", p)
 	}
 	m.Text, m.Edited, m.TS = "two", true, t0.Add(time.Minute)
 	m.StoredAt = m.TS
 	if err := Apply(s, Op{Kind: OpEdit, Msg: m}); err != nil {
 		t.Fatal(err)
 	}
+	if p := pending(); len(p) != 1 || p[0].Text != "two" || !p[0].Edited {
+		t.Fatalf("after edit: %+v", p)
+	}
 	if err := Apply(s, Op{Kind: OpDelete, Msg: store.Message{ID: "X"}}); err != nil {
 		t.Fatal(err)
+	}
+	if p := pending(); len(p) != 0 {
+		t.Fatalf("after delete: %+v", p)
 	}
 	if err := Apply(s, Op{Kind: 99}); err == nil {
 		t.Fatal("want error for unknown op")

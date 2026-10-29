@@ -4,6 +4,7 @@ package ingest
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,6 +90,11 @@ func FromMessage(evt *events.Message, f Filter, n Names) (Op, bool) {
 		return Op{}, false
 	}
 	m := build(evt, n, kind, body, msg)
+	if evt.IsEdit {
+		// ParseWebMessage rewrites MESSAGE_EDIT: Info.ID is the target's ID.
+		m.Edited, m.TS, m.StoredAt = true, ts, ts
+		return Op{Kind: OpEdit, Msg: m}, true
+	}
 	m.StoredAt = now
 	return Op{Kind: OpInsert, Msg: m}, true
 }
@@ -229,11 +235,17 @@ func FromHistory(evt *events.HistorySync, f Filter, n Names,
 		if err != nil || !f.Groups[chat] {
 			continue
 		}
+		var evs []*events.Message
 		for _, hm := range c.GetMessages() {
 			me, err := parse(chat, hm.GetMessage())
 			if err != nil || me == nil {
 				continue
 			}
+			evs = append(evs, me)
+		}
+		// Oldest first, so an original precedes its edits and revokes.
+		sort.SliceStable(evs, func(i, j int) bool { return evs[i].Info.Timestamp.Before(evs[j].Info.Timestamp) })
+		for _, me := range evs {
 			if op, ok := FromMessage(me, f, n); ok {
 				ops = append(ops, op)
 			}
