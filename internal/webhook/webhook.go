@@ -7,11 +7,15 @@ package webhook
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"syscall"
 	"time"
 )
 
@@ -31,8 +35,42 @@ type Sender struct {
 
 var ErrNotOK = errors.New("webhook: response was not ok")
 
-// errTransport is a URL-free stand-in for *url.Error from http.Client.Do.
-var errTransport = errors.New("webhook: request failed")
+// transportError is a URL-free stand-in for *url.Error from http.Client.Do:
+// it carries only a category, never the raw error text, host or URL.
+type transportError struct{ cat string }
+
+func (e transportError) Error() string { return "webhook: request failed (" + e.cat + ")" }
+
+func transportErr(err error) error { return transportError{cat: category(err)} }
+
+// category classifies a transport error as timeout, dns, tls, refused or other.
+func category(err error) string {
+	var ne net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout() {
+		return "timeout"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "dns"
+	}
+	var (
+		recErr   tls.RecordHeaderError
+		alertErr tls.AlertError
+		verErr   *tls.CertificateVerificationError
+		uaErr    x509.UnknownAuthorityError
+		hostErr  x509.HostnameError
+		invErr   x509.CertificateInvalidError
+		rootsErr x509.SystemRootsError
+	)
+	if errors.As(err, &recErr) || errors.As(err, &alertErr) || errors.As(err, &verErr) ||
+		errors.As(err, &uaErr) || errors.As(err, &hostErr) || errors.As(err, &invErr) || errors.As(err, &rootsErr) {
+		return "tls"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "refused"
+	}
+	return "other"
+}
 
 func defaultSleep(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
@@ -80,13 +118,13 @@ func (s *Sender) Send(ctx context.Context, p Payload) error {
 			return ctx.Err()
 		}
 	}
-	return fmt.Errorf("after %d attempts: %w", attempts, last)
+	return fmt.Errorf("%w after %d attempts", last, attempts)
 }
 
 func (s *Sender) attempt(ctx context.Context, client *http.Client, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.URL, bytes.NewReader(body))
 	if err != nil {
-		return errTransport // NewRequest errors can embed the URL
+		return transportError{cat: "other"} // NewRequest errors can embed the URL
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
@@ -94,12 +132,12 @@ func (s *Sender) attempt(ctx context.Context, client *http.Client, body []byte) 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return errTransport // *url.Error would carry the URL
+		return transportErr(err) // *url.Error would carry the URL
 	}
 	defer resp.Body.Close()
 	got, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if err != nil {
-		return errTransport
+		return transportErr(err)
 	}
 	if resp.StatusCode != http.StatusOK || string(got) != "ok" {
 		return fmt.Errorf("%w (status %d)", ErrNotOK, resp.StatusCode)

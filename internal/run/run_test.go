@@ -1,8 +1,10 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -236,5 +238,26 @@ func TestRunFatalDuringSync(t *testing.T) {
 		if got := strings.Join(wa.calls, ","); got != "connect,wait,disconnect,send" {
 			t.Errorf("%v: calls = %s", tc.err, got)
 		}
+	}
+}
+
+func TestRunLogsSendFailureReason(t *testing.T) {
+	d, _, _ := setup(t)
+	var buf bytes.Buffer
+	d.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	d.Send = func(ctx context.Context, p webhook.Payload) error {
+		return fmt.Errorf("%w (status 500) after 4 attempts", webhook.ErrNotOK)
+	}
+	if err := Run(context.Background(), d); err == nil {
+		t.Fatal("want error")
+	}
+	var line string
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(l, "send failed") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "status 500") || !strings.Contains(line, "ms=") {
+		t.Errorf("send failure log = %q", line)
 	}
 }

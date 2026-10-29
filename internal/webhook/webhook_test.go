@@ -2,12 +2,19 @@ package webhook
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -180,8 +187,58 @@ func TestTransportErrorDoesNotLeakURL(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error")
 	}
-	if strings.Contains(err.Error(), "DEPLOYMENT-ID") || strings.Contains(err.Error(), srv.URL) {
-		t.Errorf("error leaks url: %v", err)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	for _, leak := range []string{"DEPLOYMENT-ID", srv.URL, host, "127.0.0.1", "connection refused"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("error leaks %q: %v", leak, err)
+		}
+	}
+	if want := "webhook: request failed (refused) after 4 attempts"; err.Error() != want {
+		t.Errorf("err = %q, want %q", err, want)
+	}
+}
+
+func TestTransportErrorCategories(t *testing.T) {
+	// Self-signed certificate: the default client rejects it.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	err := (&Sender{URL: srv.URL + "/exec", Waits: []time.Duration{}}).Send(context.Background(), testPayload)
+	if err == nil || !strings.Contains(err.Error(), "(tls)") || strings.Contains(err.Error(), "127.0.0.1") {
+		t.Errorf("tls: %v", err)
+	}
+
+	// Client timeout.
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+	}))
+	defer slow.Close()
+	s := &Sender{URL: slow.URL, Client: &http.Client{Timeout: 20 * time.Millisecond}, Waits: []time.Duration{}}
+	if err := s.Send(context.Background(), testPayload); err == nil || !strings.Contains(err.Error(), "(timeout)") {
+		t.Errorf("timeout: %v", err)
+	}
+
+	wrap := func(e error) error { return &url.Error{Op: "Post", URL: "https://h.example/x", Err: e} }
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{wrap(&net.DNSError{Err: "no such host", Name: "h.example", IsNotFound: true}), "dns"},
+		{wrap(context.DeadlineExceeded), "timeout"},
+		{wrap(&net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}), "refused"},
+		{wrap(x509.UnknownAuthorityError{}), "tls"},
+		{wrap(x509.HostnameError{Certificate: &x509.Certificate{}, Host: "h.example"}), "tls"},
+		{wrap(&tls.CertificateVerificationError{Err: errors.New("x")}), "tls"},
+		{wrap(tls.RecordHeaderError{Msg: "bad"}), "tls"},
+		{wrap(tls.AlertError(40)), "tls"},
+		{wrap(errors.New("something h.example")), "other"},
+	} {
+		got := category(tc.err)
+		if got != tc.want {
+			t.Errorf("category(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+		if msg := transportErr(tc.err).Error(); msg != fmt.Sprintf("webhook: request failed (%s)", tc.want) {
+			t.Errorf("message %q", msg)
+		}
 	}
 }
 

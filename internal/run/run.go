@@ -142,7 +142,7 @@ func Run(ctx context.Context, d Deps) error {
 	}
 	t := time.Now()
 	if err := d.Send(ctx, p); err != nil {
-		log.Error("send failed", "ms", time.Since(t).Milliseconds())
+		log.Error("send failed", "err", err, "ms", time.Since(t).Milliseconds()) // err is URL-free
 		return err
 	}
 	log.Info("send", "ok", true, "ms", time.Since(t).Milliseconds())
