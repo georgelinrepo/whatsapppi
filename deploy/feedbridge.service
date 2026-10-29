@@ -1,0 +1,18 @@
+[Unit]
+Description=feedbridge: daily WhatsApp parent-group feed
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30min
+User=feedbridge
+ExecStart=/usr/local/bin/feedbridge --run
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/feedbridge
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=256M
