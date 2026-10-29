@@ -22,7 +22,7 @@ func Line(s string) string {
 		case r == '\r' && i+1 < len(rs) && rs[i+1] == '\n':
 			i++
 			b.WriteString(breakMarker)
-		case r == '\n', r == '\r', r == '\u0085', r == ' ', r == ' ':
+		case r == '\n', r == '\r', r == '\u0085', r == '\u2028', r == '\u2029':
 			b.WriteString(breakMarker)
 		case r == '\t':
 			b.WriteByte(' ')
