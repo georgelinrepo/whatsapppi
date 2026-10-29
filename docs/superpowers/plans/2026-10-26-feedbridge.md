@@ -424,5 +424,5 @@ Manual; needs the monitoring SIM and WhatsApp account from spec setup steps 1–
 - [ ] **Step 2: Link and list:** `sudo -u feedbridge feedbridge --link`, scan; `sudo -u feedbridge feedbridge --list-groups` prints both groups; copy JIDs into the config. While a run is in progress, `--list-groups` prints `run in progress` (spec test 19).
 - [ ] **Step 3: First run:** `sudo systemctl enable --now feedbridge.timer && sudo systemctl start feedbridge` → WA-FEED email arrives; `journalctl -u feedbridge` has no message text or names.
 - [ ] **Step 4: Spec acceptance tests 1–12, 14, 16–22** by hand in the real groups (post, reply, image, poll, edit, delete, long message, forged end marker in text/name/filename, stop the Pi overnight, unlink and re-link). Record pass/fail per test in `docs/acceptance-2026-10.md`.
-- [ ] **Step 5: Soak test (spec test 23)** for 7 days alongside the Baileys bridge; record each day's result in the same file. Only then do spec setup step 8.
+- [ ] **Step 5: Soak test (spec test 23)** for 7 days, comparing each feed with the groups on the phone; record each day's result in the same file.
 - [ ] **Step 6: Commit** `docs: acceptance and soak results`

@@ -1,8 +1,8 @@
 # Installing feedbridge on the Pi
 
 These steps cover spec §One-time setup 4–7. Steps 1–3 (SIM, second WhatsApp
-account, joining the groups) come first; step 8 (retiring the Baileys bridge)
-comes after the one-week soak test.
+account, joining the groups) come first; step 8 is the one-week soak test
+(acceptance test 23), before relying on the feed.
 
 ## 1. Apps Script (setup step 4)
 

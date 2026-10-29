@@ -190,7 +190,7 @@ Secrets live in separate files, never in the TOML, so the config can be shown or
 5. **Install.** Build the binary (see Runtime isolation), copy it to `/usr/local/bin`, create the user and directories, write the config and secrets, install `feedbridge.service` and `feedbridge.timer`.
 6. **Link.** Run `sudo -u feedbridge feedbridge --link` and scan the QR from Linked devices in the monitoring account. Then run `sudo -u feedbridge feedbridge --list-groups` and copy the two group JIDs into the config.
 7. **Start.** `systemctl enable --now feedbridge.timer`, then `systemctl start feedbridge` to run once now and confirm a WA-FEED email arrives.
-8. **Retire the Baileys bridge**, only after the one-week soak test (acceptance test 23) passes; until then both run side by side. Disable the old `wa-bridge`, `wa-sms` and `wa-digest` units, unlink that device from the owner's personal WhatsApp, and delete its `auth/` folder and `messages.jsonl`.
+8. **Soak test.** Run the one-week soak test (acceptance test 23) before relying on the feed.
 
 ## Operations, failure modes and testing
 
