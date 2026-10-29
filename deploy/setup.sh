@@ -51,7 +51,7 @@ if [ ! -s "$SECRET" ]; then
 	new_file "$SECRET"
 	openssl rand -hex 32 >"$SECRET"
 	echo
-	echo "At script.google.com, create a project and paste in appscript/Code.js from this repo."
+	echo "At script.google.com, create a project and paste in appsscript/Code.js from this repo."
 	echo "Then Project Settings > Script properties, add FEED_SECRET with this value:"
 	echo
 	echo "    $(cat "$SECRET")"
