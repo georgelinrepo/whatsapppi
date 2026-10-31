@@ -2,9 +2,15 @@
 # Secrets are never put here: they live in the two files named under [feed].
 
 [whatsapp]
-# Group JIDs from `feedbridge --list-groups`. Placeholders: replace both.
-# May be left empty (groups = []) until after --link and --list-groups.
+# Which groups go in the feed. Either list them by JID (from
+# `feedbridge --list-groups`), or set all_groups = true and leave groups
+# empty to take every group the monitoring number is in. Private chats are
+# never read. Placeholders: replace both, or use all_groups.
+# groups may be left empty (groups = []) until after --link and --list-groups.
 groups = ["REPLACE-WITH-GROUP-1-JID@g.us", "REPLACE-WITH-GROUP-2-JID@g.us"]
+all_groups = false
+# With all_groups = true only: joined groups to leave out, by JID.
+# exclude_groups = ["120363...@g.us"]
 # whatsmeow session store; treat as a credential.
 session_db = "/var/lib/feedbridge/session.db"
 

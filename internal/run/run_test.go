@@ -29,7 +29,14 @@ type fakeWA struct {
 	syncErr    error
 	msgs       []store.Message
 	names      map[string]error
+	joined     []GroupInfo
+	joinedErr  error
 	calls      []string
+}
+
+func (f *fakeWA) JoinedGroups(ctx context.Context) ([]GroupInfo, error) {
+	f.calls = append(f.calls, "joined")
+	return f.joined, f.joinedErr
 }
 
 func (f *fakeWA) Connect(ctx context.Context) error {
@@ -181,6 +188,83 @@ func TestRunMissingGroup(t *testing.T) {
 	}
 	if !strings.Contains((*sent)[0].Text, "groups: 1/2 found (missing: "+g2+")") {
 		t.Errorf("text:\n%s", (*sent)[0].Text)
+	}
+}
+
+func allGroups(t *testing.T) (Deps, *fakeWA, *[]webhook.Payload) {
+	t.Helper()
+	d, wa, sent := setup(t)
+	d.Cfg.Groups, d.Cfg.AllGroups = nil, true
+	wa.joined = []GroupInfo{{JID: g2, Name: "Zebra Club"}, {JID: g1, Name: "Apple\nClass"}}
+	return d, wa, sent
+}
+
+func TestRunAllGroups(t *testing.T) {
+	d, wa, sent := allGroups(t)
+	if err := Run(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	txt := (*sent)[0].Text
+	a := strings.Index(txt, "===== GROUP: Apple / Class =====\n")
+	z := strings.Index(txt, "===== GROUP: Zebra Club =====\n")
+	if a < 0 || z < 0 || a > z {
+		t.Errorf("want sanitised names sorted by name:\n%s", txt)
+	}
+	if !strings.Contains(txt, "| groups: all, 2 joined\n") || !strings.Contains(txt, "groups: 2 ·") {
+		t.Errorf("counts:\n%s", txt)
+	}
+	if got := strings.Join(wa.calls, ","); got != "connect,wait,joined,disconnect,send" {
+		t.Errorf("calls = %s", got)
+	}
+}
+
+func TestRunAllGroupsExcluded(t *testing.T) {
+	d, _, sent := allGroups(t)
+	d.Cfg.ExcludeGroups = []string{g2}
+	if err := Run(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	txt := (*sent)[0].Text
+	if strings.Contains(txt, "hello two") || strings.Contains(txt, g2) || !strings.Contains(txt, "hello one") {
+		t.Errorf("excluded group in feed:\n%s", txt)
+	}
+	if !strings.Contains(txt, "| groups: all, 1 joined, 1 excluded\n") {
+		t.Errorf("footer:\n%s", txt)
+	}
+	if p, _ := d.Store.Pending(now.Add(time.Hour)); len(p) != 0 {
+		t.Errorf("excluded group's rows still pending: %d", len(p))
+	}
+}
+
+func TestRunAllGroupsUnlisted(t *testing.T) {
+	// A group with pending messages that the number has left, and one when
+	// WhatsApp could not be reached: both still appear, headed by JID.
+	d, wa, sent := allGroups(t)
+	wa.joined = []GroupInfo{{JID: g1, Name: "Apple Class"}}
+	if err := Run(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	txt := (*sent)[0].Text
+	if !strings.Contains(txt, "===== GROUP: "+g2+" =====\n") || !strings.Contains(txt, "hello two") {
+		t.Errorf("left group missing:\n%s", txt)
+	}
+
+	d, wa, sent = allGroups(t)
+	wa.connectErr = ErrLoggedOut
+	if err := d.Store.Insert(wa.msgs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	txt = (*sent)[0].Text
+	if !strings.Contains(txt, "===== GROUP: "+g1+" =====\n") || !strings.Contains(txt, "| groups: all, not checked\n") {
+		t.Errorf("logged out:\n%s", txt)
+	}
+	for _, c := range wa.calls {
+		if c == "joined" {
+			t.Error("JoinedGroups called while logged out")
+		}
 	}
 }
 

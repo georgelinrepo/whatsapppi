@@ -43,7 +43,7 @@ func OpenContainer(ctx context.Context, path string) (*sqlstore.Container, error
 }
 
 // GroupInfo is one group the linked number belongs to.
-type GroupInfo struct{ JID, Name string }
+type GroupInfo = run.GroupInfo
 
 // Client adapts whatsmeow to run.WhatsApp and feeds every event through ingest.
 type Client struct {
@@ -82,7 +82,8 @@ type Client struct {
 var _ run.WhatsApp = (*Client)(nil)
 
 // New opens cfg.SessionDB and prepares (but does not connect) a client.
-// Events for cfg.Groups are written to st.
+// Events for the watched groups (cfg.Groups, or every group with
+// cfg.AllGroups, minus cfg.ExcludeGroups) are written to st.
 func New(ctx context.Context, cfg config.Config, st *fbstore.Store) (*Client, error) {
 	container, err := OpenContainer(ctx, cfg.SessionDB)
 	if err != nil {
@@ -93,14 +94,15 @@ func New(ctx context.Context, cfg config.Config, st *fbstore.Store) (*Client, er
 		container.Close()
 		return nil, fmt.Errorf("session store: %w", err)
 	}
-	groups := make(map[types.JID]bool, len(cfg.Groups))
-	for _, g := range cfg.Groups {
-		j, err := types.ParseJID(g)
-		if err != nil {
-			container.Close()
-			return nil, fmt.Errorf("whatsapp.groups: %q: %w", g, err)
-		}
-		groups[j] = true
+	groups, err := jidSet("whatsapp.groups", cfg.Groups)
+	if err != nil {
+		container.Close()
+		return nil, err
+	}
+	exclude, err := jidSet("whatsapp.exclude_groups", cfg.ExcludeGroups)
+	if err != nil {
+		container.Close()
+		return nil, err
 	}
 
 	store.DeviceProps.RequireFullSync = proto.Bool(false)
@@ -110,10 +112,11 @@ func New(ctx context.Context, cfg config.Config, st *fbstore.Store) (*Client, er
 	cli.InitialAutoReconnect = true
 
 	c := &Client{
-		cli:         cli,
-		container:   container,
-		st:          st,
-		filter:      ingest.Filter{Groups: groups, Retention: cfg.Retention, Now: time.Now},
+		cli:       cli,
+		container: container,
+		st:        st,
+		filter: ingest.Filter{Groups: groups, All: cfg.AllGroups, Exclude: exclude,
+			Retention: cfg.Retention, Now: time.Now},
 		names:       contactNames{contacts: dev.Contacts},
 		log:         log,
 		syncTimeout: cfg.SyncTimeout,
@@ -125,6 +128,18 @@ func New(ctx context.Context, cfg config.Config, st *fbstore.Store) (*Client, er
 	c.onHistory = c.handleHistory
 	cli.AddEventHandler(c.handle)
 	return c, nil
+}
+
+func jidSet(key string, jids []string) (map[types.JID]bool, error) {
+	set := make(map[types.JID]bool, len(jids))
+	for _, g := range jids {
+		j, err := types.ParseJID(g)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %q: %w", key, g, err)
+		}
+		set[j] = true
+	}
+	return set, nil
 }
 
 // Close releases the session database. Call after Disconnect, and before

@@ -122,6 +122,33 @@ func TestLoadRejects(t *testing.T) {
 	}
 }
 
+func TestLoadAllGroups(t *testing.T) {
+	toml := strings.Replace(minimal, `groups = ["120363012345678901@g.us"]`,
+		"all_groups = true\nexclude_groups = [\"120363098765432109@g.us\"]", 1)
+	c, err := Load(write(t, toml, goodSecret, goodURL))
+	must(t, err)
+	if !c.AllGroups || len(c.Groups) != 0 || len(c.ExcludeGroups) != 1 || c.ExcludeGroups[0] != "120363098765432109@g.us" {
+		t.Errorf("got AllGroups=%v Groups=%v Exclude=%v", c.AllGroups, c.Groups, c.ExcludeGroups)
+	}
+}
+
+func TestLoadRejectsGroupModes(t *testing.T) {
+	cases := []struct{ name, toml, key string }{
+		{"all with list", strings.Replace(minimal, "[whatsapp]", "[whatsapp]\nall_groups = true", 1), "whatsapp.groups"},
+		{"exclude without all", strings.Replace(minimal, "[whatsapp]", "[whatsapp]\nexclude_groups = [\"1@g.us\"]", 1), "whatsapp.exclude_groups"},
+		{"exclude suffix", strings.Replace(minimal, `groups = ["120363012345678901@g.us"]`,
+			"all_groups = true\nexclude_groups = [\"1@s.whatsapp.net\"]", 1), "whatsapp.exclude_groups"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(write(t, tc.toml, goodSecret, goodURL))
+			if err == nil || !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("err = %v, want one naming %s", err, tc.key)
+			}
+		})
+	}
+}
+
 func TestLoadAllowsEmptyGroups(t *testing.T) {
 	toml := strings.Replace(minimal, `["120363012345678901@g.us"]`, `[]`, 1)
 	c, err := Load(write(t, toml, goodSecret, goodURL))

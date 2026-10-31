@@ -228,6 +228,19 @@ func TestFooterStates(t *testing.T) {
 	if strings.Contains(Build(baseInput(nil)).Text, "warning:") {
 		t.Fatal("unexpected warning")
 	}
+	for _, tc := range []struct {
+		h    Health
+		want string
+	}{
+		{Health{Status: "not_synced", Reason: "BANNED", AllGroups: true, GroupsUnchecked: true}, "NOT SYNCED — BANNED | groups: all, not checked\n"},
+		{Health{Status: "partial", Timeout: 5 * time.Minute, AllGroups: true, GroupsFound: 4}, "(0 new) | groups: all, 4 joined\n"},
+		{Health{Status: "partial", Timeout: 5 * time.Minute, AllGroups: true, GroupsFound: 4, Excluded: 1}, "(0 new) | groups: all, 4 joined, 1 excluded\n"},
+	} {
+		in.Health = tc.h
+		if r := Build(in); !strings.Contains(r.Text, tc.want) {
+			t.Errorf("want %q in:\n%s", tc.want, r.Text)
+		}
+	}
 }
 
 func TestUnknownGroupIgnored(t *testing.T) {

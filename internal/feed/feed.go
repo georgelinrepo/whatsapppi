@@ -36,6 +36,12 @@ type Health struct {
 	GroupsTotal int
 	Missing     []string // JIDs
 	StoreErrors int
+
+	// All-groups mode: GroupsFound is the number of joined groups watched,
+	// and GroupsTotal and Missing are unused.
+	AllGroups       bool
+	Excluded        int  // joined groups left out by whatsapp.exclude_groups
+	GroupsUnchecked bool // the joined groups could not be listed
 }
 
 type Input struct {
@@ -162,9 +168,19 @@ func render(in Input, idx map[string]int, all []store.Message, cut int) Result {
 	default:
 		fmt.Fprintf(&b, "whatsapp: NOT SYNCED — %s", h.Reason)
 	}
-	fmt.Fprintf(&b, " | groups: %d/%d found", h.GroupsFound, h.GroupsTotal)
-	if len(h.Missing) > 0 {
-		fmt.Fprintf(&b, " (missing: %s)", strings.Join(h.Missing, ", "))
+	switch {
+	case h.AllGroups && h.GroupsUnchecked:
+		b.WriteString(" | groups: all, not checked")
+	case h.AllGroups:
+		fmt.Fprintf(&b, " | groups: all, %d joined", h.GroupsFound)
+		if h.Excluded > 0 {
+			fmt.Fprintf(&b, ", %d excluded", h.Excluded)
+		}
+	default:
+		fmt.Fprintf(&b, " | groups: %d/%d found", h.GroupsFound, h.GroupsTotal)
+		if len(h.Missing) > 0 {
+			fmt.Fprintf(&b, " (missing: %s)", strings.Join(h.Missing, ", "))
+		}
 	}
 	b.WriteString("\n")
 	if len(all) == 0 {

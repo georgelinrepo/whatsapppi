@@ -20,6 +20,8 @@ const (
 // Config is the validated runtime configuration.
 type Config struct {
 	Groups          []string      // whatsapp.groups (JIDs)
+	AllGroups       bool          // whatsapp.all_groups: every joined group, not Groups
+	ExcludeGroups   []string      // whatsapp.exclude_groups (JIDs), with AllGroups only
 	SessionDB       string        // whatsapp.session_db
 	StorePath       string        // store.path
 	Retention       time.Duration // store.retention_hours
@@ -37,8 +39,10 @@ func (c Config) LockPath() string {
 
 type rawConfig struct {
 	WhatsApp struct {
-		Groups    []string `toml:"groups"`
-		SessionDB string   `toml:"session_db"`
+		Groups        []string `toml:"groups"`
+		AllGroups     bool     `toml:"all_groups"`
+		ExcludeGroups []string `toml:"exclude_groups"`
+		SessionDB     string   `toml:"session_db"`
 	} `toml:"whatsapp"`
 	Store struct {
 		Path           string `toml:"path"`
@@ -63,6 +67,8 @@ func Load(path string) (Config, error) {
 
 	c := Config{
 		Groups:          raw.WhatsApp.Groups,
+		AllGroups:       raw.WhatsApp.AllGroups,
+		ExcludeGroups:   raw.WhatsApp.ExcludeGroups,
 		SessionDB:       raw.WhatsApp.SessionDB,
 		StorePath:       raw.Store.Path,
 		Retention:       48 * time.Hour,
@@ -91,6 +97,17 @@ func Load(path string) (Config, error) {
 		if !strings.HasSuffix(g, "@g.us") {
 			return Config{}, fmt.Errorf("whatsapp.groups: %q is not a group JID (want ...@g.us)", g)
 		}
+	}
+	for _, g := range c.ExcludeGroups {
+		if !strings.HasSuffix(g, "@g.us") {
+			return Config{}, fmt.Errorf("whatsapp.exclude_groups: %q is not a group JID (want ...@g.us)", g)
+		}
+	}
+	if c.AllGroups && len(c.Groups) > 0 {
+		return Config{}, fmt.Errorf("whatsapp.groups: must be empty when whatsapp.all_groups is true")
+	}
+	if !c.AllGroups && len(c.ExcludeGroups) > 0 {
+		return Config{}, fmt.Errorf("whatsapp.exclude_groups: only used when whatsapp.all_groups is true")
 	}
 	if c.SessionDB == "" {
 		return Config{}, fmt.Errorf("whatsapp.session_db: required")

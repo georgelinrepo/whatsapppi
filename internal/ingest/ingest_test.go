@@ -148,6 +148,37 @@ func TestUnknownSender(t *testing.T) {
 	}
 }
 
+func TestWatched(t *testing.T) {
+	excluded := types.JID{User: "120363000000000003", Server: types.GroupServer}
+	all := Filter{All: true, Exclude: map[types.JID]bool{excluded: true}}
+	for _, tc := range []struct {
+		name string
+		f    Filter
+		chat types.JID
+		want bool
+	}{
+		{"listed group", filter, group, true},
+		{"unlisted group", filter, other, false},
+		{"all: any group", all, other, true},
+		{"all: excluded group", all, excluded, false},
+		{"all: private chat", all, sarah, false},
+		{"all: lid private chat", all, types.JID{User: "1234", Server: types.HiddenUserServer}, false},
+		{"all: status broadcast", all, types.StatusBroadcastJID, false},
+		{"all: broadcast list", all, types.JID{User: "1234", Server: types.BroadcastServer}, false},
+		{"all: channel", all, types.JID{User: "1234", Server: types.NewsletterServer}, false},
+	} {
+		if got := tc.f.Watched(tc.chat); got != tc.want {
+			t.Errorf("%s: Watched(%s) = %v, want %v", tc.name, tc.chat, got, tc.want)
+		}
+	}
+	// A broadcast-list message has IsGroup set; it must still be dropped.
+	e := ev(types.StatusBroadcastJID, "S", t0, text("story"))
+	e.Info.IsGroup = true
+	if _, ok := FromMessage(e, all, names{}); ok {
+		t.Error("status broadcast stored with All")
+	}
+}
+
 func TestFromHistory(t *testing.T) {
 	web := func(id string) *waHistorySync.HistorySyncMsg {
 		return &waHistorySync.HistorySyncMsg{Message: &waWeb.WebMessageInfo{Key: &waCommon.MessageKey{ID: proto.String(id)}}}
@@ -189,6 +220,17 @@ func TestFromHistory(t *testing.T) {
 	ops = FromHistory(h, filter, names{}, parse)
 	if len(ops) != 2 || ops[0].Kind != OpInsert || ops[0].Msg.ID != "A" || ops[1].Kind != OpDelete || ops[1].Msg.ID != "A" {
 		t.Fatalf("order: %+v", ops)
+	}
+
+	// All groups: every group conversation, but never a private chat.
+	all := filter
+	all.Groups, all.All = nil, true
+	h = &events.HistorySync{Data: &waHistorySync.HistorySync{Conversations: []*waHistorySync.Conversation{
+		conv(group, "A"), conv(other, "C"), conv(sarah, "P"),
+	}}}
+	ops = FromHistory(h, all, names{}, parse)
+	if len(ops) != 2 || ops[0].Msg.ID != "A" || ops[1].Msg.ID != "C" {
+		t.Fatalf("all groups: %+v", ops)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"feedbridge/internal/config"
@@ -25,8 +26,12 @@ type WhatsApp interface {
 	Connect(ctx context.Context) error // returns ErrLoggedOut, ErrBanned, or a connection error
 	WaitSynced(ctx context.Context, timeout time.Duration) SyncResult
 	GroupName(ctx context.Context, jid string) (string, error) // ErrNotMember if not in group
+	JoinedGroups(ctx context.Context) ([]GroupInfo, error)
 	Disconnect()
 }
+
+// GroupInfo is one group the linked number belongs to.
+type GroupInfo struct{ JID, Name string }
 
 var (
 	ErrLoggedOut = errors.New("logged out")
@@ -80,30 +85,12 @@ func Run(ctx context.Context, d Deps) error {
 		log.Warn("connect", "ok", false, "reason", h.Reason)
 	}
 
-	groups := make([]feed.Group, 0, len(cfg.Groups))
-	h.GroupsTotal = len(cfg.Groups)
-	for _, jid := range cfg.Groups {
-		g := feed.Group{JID: jid, Name: jid}
-		found := true
-		if available {
-			name, err := d.WA.GroupName(ctx, jid)
-			switch {
-			case errors.Is(err, ErrNotMember):
-				found = false
-			case err == nil:
-				if n := sanitize.Line(name); n != "" {
-					g.Name = n
-				}
-			}
-		}
-		if found {
-			h.GroupsFound++
-		} else {
-			h.Missing = append(h.Missing, jid)
-		}
-		groups = append(groups, g)
+	var groups []feed.Group
+	if cfg.AllGroups {
+		groups = joinedGroups(ctx, d.WA, available, cfg.ExcludeGroups, &h, log)
+	} else {
+		groups = listedGroups(ctx, d.WA, available, cfg.Groups, &h, log)
 	}
-	log.Info("groups", "found", h.GroupsFound, "total", h.GroupsTotal)
 
 	if connected {
 		d.WA.Disconnect()
@@ -119,6 +106,9 @@ func Run(ctx context.Context, d Deps) error {
 	if err != nil {
 		log.Error("pending failed", "err", err)
 		return err
+	}
+	if cfg.AllGroups {
+		groups = addUnlisted(groups, pending, cfg.ExcludeGroups)
 	}
 	last, _, err := d.Store.LastSentAt()
 	if err != nil {
@@ -157,6 +147,100 @@ func Run(ctx context.Context, d Deps) error {
 	}
 	log.Info("commit", "ids", len(ids))
 	return nil
+}
+
+// listedGroups names each configured group and counts the ones the number
+// is still in.
+func listedGroups(ctx context.Context, wa WhatsApp, available bool, jids []string, h *feed.Health, log *slog.Logger) []feed.Group {
+	groups := make([]feed.Group, 0, len(jids))
+	h.GroupsTotal = len(jids)
+	for _, jid := range jids {
+		g := feed.Group{JID: jid, Name: jid}
+		found := true
+		if available {
+			name, err := wa.GroupName(ctx, jid)
+			switch {
+			case errors.Is(err, ErrNotMember):
+				found = false
+			case err == nil:
+				if n := sanitize.Line(name); n != "" {
+					g.Name = n
+				}
+			}
+		}
+		if found {
+			h.GroupsFound++
+		} else {
+			h.Missing = append(h.Missing, jid)
+		}
+		groups = append(groups, g)
+	}
+	log.Info("groups", "found", h.GroupsFound, "total", h.GroupsTotal)
+	return groups
+}
+
+// joinedGroups lists every group the number is in, minus the excluded ones,
+// sorted by name. When WhatsApp is unavailable the list is empty and the
+// footer says the groups were not checked.
+func joinedGroups(ctx context.Context, wa WhatsApp, available bool, exclude []string, h *feed.Health, log *slog.Logger) []feed.Group {
+	h.AllGroups = true
+	if !available {
+		h.GroupsUnchecked = true
+		return nil
+	}
+	joined, err := wa.JoinedGroups(ctx)
+	if err != nil {
+		h.GroupsUnchecked = true
+		log.Warn("groups", "err", err)
+		return nil
+	}
+	skip := make(map[string]bool, len(exclude))
+	for _, jid := range exclude {
+		skip[jid] = true
+	}
+	var groups []feed.Group
+	for _, j := range joined {
+		if skip[j.JID] {
+			h.Excluded++
+			continue
+		}
+		g := feed.Group{JID: j.JID, Name: sanitize.Line(j.Name)}
+		if g.Name == "" {
+			g.Name = j.JID
+		}
+		groups = append(groups, g)
+	}
+	sort.SliceStable(groups, func(i, k int) bool {
+		if groups[i].Name != groups[k].Name {
+			return groups[i].Name < groups[k].Name
+		}
+		return groups[i].JID < groups[k].JID
+	})
+	h.GroupsFound = len(groups)
+	log.Info("groups", "joined", h.GroupsFound, "excluded", h.Excluded)
+	return groups
+}
+
+// addUnlisted appends, headed by JID, any group with pending messages that
+// joinedGroups did not return: one the number has since left, or every
+// group when WhatsApp was unavailable. Excluded groups stay out.
+func addUnlisted(groups []feed.Group, pending []store.Message, exclude []string) []feed.Group {
+	seen := make(map[string]bool, len(groups)+len(exclude))
+	for _, g := range groups {
+		seen[g.JID] = true
+	}
+	for _, jid := range exclude {
+		seen[jid] = true
+	}
+	var extra []feed.Group
+	for _, m := range pending {
+		if !seen[m.Chat] {
+			seen[m.Chat] = true
+			extra = append(extra, feed.Group{JID: m.Chat, Name: m.Chat})
+		}
+	}
+	sort.Slice(extra, func(i, k int) bool { return extra[i].JID < extra[k].JID })
+	return append(groups, extra...)
 }
 
 // reason is the health-line text for an unavailable WhatsApp.

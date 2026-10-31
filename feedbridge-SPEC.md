@@ -1,21 +1,21 @@
 # WhatsApp Feed Bridge — Spec
 
-Oct 14, 2026 (updated Oct 29, 2026)
+Oct 14, 2026 (updated Oct 31, 2026)
 
 ## Purpose and scope
 
-A read-only job on the owner's Raspberry Pi 5 that runs once a day at 06:30, collects the new messages from two WhatsApp group chats and posts them to a small Apps Script web app in the owner's own Google account. The script emails them to him as one "WA-FEED" message for the 06:52 to-do digest to read.
+A read-only job on the owner's Raspberry Pi 5 that runs once a day at 06:30, collects the new messages from the WhatsApp group chats the monitoring number is in (or a configured list of them) and posts them to a small Apps Script web app in the owner's own Google account. The script emails them to him as one "WA-FEED" message for the 06:52 to-do digest to read.
 
 **Goals**
 
-- Catch deadlines, payments, forms and kit reminders posted in the two group chats, without manual forwarding.
+- Catch deadlines, payments, forms and kit reminders posted in the school and club group chats, without manual forwarding, and without a config change each time the monitoring number joins another group.
 - Never expose the owner's personal WhatsApp account: the bridge links to a separate monitoring number only.
 - Hold as little data as possible, for as short a time as possible.
 
 **Non-goals**
 
 - Sending, replying, reacting or marking anything read.
-- Reading any chat other than the configured groups.
+- Reading private (one-to-one) chats, broadcast lists, status updates or channels. Only group chats are ever read, and only the watched ones (see Group selection).
 - Media content (images, voice notes, documents): v1 records a marker such as `[image]` plus any caption, but never downloads the file.
 - Poll options and votes: v1 shows only a poll's question, not its options, the counts or who voted, so no per-voter data is kept.
 - Official WhatsApp API access: Meta offers none for personal or group chats, so this remains an unofficial client (see Risks).
@@ -24,7 +24,7 @@ A read-only job on the owner's Raspberry Pi 5 that runs once a day at 06:30, col
 
 ```
 Monitoring WhatsApp number (2nd SIM, second WhatsApp account on the owner's phone,
-member of the two group chats)
+member of the watched group chats only)
         │  linked device (whatsmeow)
         ▼
 ┌─────────────── Raspberry Pi 5 · feedbridge ───────────────┐
@@ -53,9 +53,13 @@ One Go binary (`feedbridge`), started once a day by a systemd timer. Each run (`
 **WhatsApp ingest (whatsmeow)**
 
 1. Links as a companion device to the monitoring WhatsApp number by QR code; session stored in a local SQLite file.
-2. Groups are configured by JID, never by name. Each run fetches the current name of each configured group for the feed headings; logs a warning for any group the number is not a member of. A `--list-groups` flag prints each group's JID and name and exits.
-3. Stores only what the feed needs from those groups: text; captions; poll questions (no options or votes); a marker for media (`[image]`, `[video]`, `[voice note]`, `[document: <filename>]`; stickers dropped); reply context (quoted sender plus the first ~40 characters of the quoted message); and the latest version of edited messages. An edit updates the message's row and sets its `stored_at` to the time of the edit, so an edit to a message that already went out in an earlier feed goes out again in the next one. Edits are judged by when they were made, not when the original was posted: an edit to a message whose row has already been purged is stored as a new row with the edited text and the edit's time as `ts`, so it still reaches the next feed. Sender and quoted-sender names are looked up in whatsmeow's own display-name store in `session.db`; the bridge keeps no name table of its own. Messages deleted for everyone are removed. "Delete for me" on another of the account's devices arrives as a settings change, not a message, and is ignored, so tidying chats on the owner's phone never changes the feed. Everything else is dropped on receipt.
-4. History sync (the recent history the phone sends a newly linked device) is downloaded and passed through exactly the same filter as live messages: configured groups only, posted within `store.retention_hours`, only the fields above; everything else is dropped on receipt. No full sync is requested (`RequireFullSync = false`). Messages are stored by WhatsApp message ID with insert-or-ignore, so a message that arrives both live and via history sync is stored once. This fills the gap after a re-link, starts the first feed with recent messages, and supplies the keys needed to decrypt edits to earlier messages.
+2. **Group selection.** The watched groups are chosen in one of two ways, never by name:
+   - **All groups** (`whatsapp.all_groups = true`, the owner's setting): every group chat the monitoring number is a member of, minus any listed by JID in `whatsapp.exclude_groups`. Joining a group is all it takes to add it to the feed; leaving it, or excluding it, takes it out. Each run lists the joined groups for the feed headings and the footer count. This relies on the monitoring account's "Who can add me to groups" setting being "My contacts" (setup step 2), so that no one can put the number in a group without the owner accepting an invite.
+   - **Listed groups** (`whatsapp.groups`): only the groups whose JIDs are listed. Each run fetches the current name of each listed group for the feed headings, and logs a warning for any the number is not a member of.
+
+   Either way, only chats on WhatsApp's group server (`@g.us`) can be watched: private chats, broadcast lists, status updates and channels are dropped on receipt. A community's announcement group is an ordinary group and is watched in all-groups mode. A `--list-groups` flag prints each joined group's JID and name and exits.
+3. Stores only what the feed needs from the watched groups: text; captions; poll questions (no options or votes); a marker for media (`[image]`, `[video]`, `[voice note]`, `[document: <filename>]`; stickers dropped); reply context (quoted sender plus the first ~40 characters of the quoted message); and the latest version of edited messages. An edit updates the message's row and sets its `stored_at` to the time of the edit, so an edit to a message that already went out in an earlier feed goes out again in the next one. Edits are judged by when they were made, not when the original was posted: an edit to a message whose row has already been purged is stored as a new row with the edited text and the edit's time as `ts`, so it still reaches the next feed. Sender and quoted-sender names are looked up in whatsmeow's own display-name store in `session.db`; the bridge keeps no name table of its own. Messages deleted for everyone are removed. "Delete for me" on another of the account's devices arrives as a settings change, not a message, and is ignored, so tidying chats on the owner's phone never changes the feed. Everything else is dropped on receipt.
+4. History sync (the recent history the phone sends a newly linked device) is downloaded and passed through exactly the same filter as live messages: watched groups only, posted within `store.retention_hours`, only the fields above; everything else is dropped on receipt. No full sync is requested (`RequireFullSync = false`). Messages are stored by WhatsApp message ID with insert-or-ignore, so a message that arrives both live and via history sync is stored once. This fills the gap after a re-link, starts the first feed with recent messages, and supplies the keys needed to decrypt edits to earlier messages.
 5. Never calls any send, read-receipt, presence or typing API. Presence stays "unavailable" so the owner's phone notifications are unaffected. whatsmeow's automatic delivery and retry receipts stay on: WhatsApp needs them to deliver messages, and other members only ever see them as the normal two grey ticks.
 6. If the connection drops during a run, reconnects with backoff until `feed.sync_timeout`. If logged out or banned, skips WhatsApp for that run and still sends the feed, with the reason in the health footer.
 
@@ -103,13 +107,13 @@ groups: 2 · messages: 37 · late: 0 · trimmed: 1 · cut: 0
 
 ===== END OF MESSAGES =====
 --- feedbridge health ---
-whatsapp: synced 06:31 (34 new) | groups: 2/2 found
+whatsapp: synced 06:31 (34 new) | groups: all, 2 joined
 store: 37 messages in window, oldest Sun 25 Oct 06:40
 version: 1.0.0
 ```
 
 - **Header:** date, the exact window with its time zone, and counts of groups, messages, late messages, trimmed messages and cut messages.
-- **Layout:** one block per group (`===== GROUP: <name> =====`), day separators (`--- Sun 25 Oct ---`), oldest first, times as `[HH:MM]` in Europe/London.
+- **Layout:** one block per group with messages (`===== GROUP: <name> =====`), in config order for listed groups and by name in all-groups mode. A group with messages still to send that the number has since left, or any group when WhatsApp could not be reached, is headed by its JID instead of its name. Day separators (`--- Sun 25 Oct ---`), oldest first, times as `[HH:MM]` in Europe/London.
 - **Senders:** WhatsApp display name only (the name the person set for themselves), never a phone number; "Unknown" if there is none.
 - **Replies:** `Name ↪ QuotedName "first ~40 chars…": text`.
 - **Media:** `[image]`, `[video]`, `[voice note]`, `[document: <filename>]`, followed by the caption if there is one.
@@ -132,7 +136,7 @@ The 06:52 digest is a separate job; this spec only works if its prompt is update
 
 ## Security requirements
 
-The design limits the worst case: if the Pi is fully compromised, an attacker gets a throwaway WhatsApp number, two days of two group chats, the display names (and possibly phone numbers) of group members from `session.db`, and a webhook secret that can only make the owner's own script email him a fake feed. Never the owner's own accounts, and no Google credential.
+The design limits the worst case: if the Pi is fully compromised, an attacker gets a throwaway WhatsApp number, two days of the watched group chats (never a private chat), the display names (and possibly phone numbers) of group members from `session.db`, and a webhook secret that can only make the owner's own script email him a fake feed. Never the owner's own accounts, and no Google credential.
 
 A fake feed matters more than it sounds: the attacker writes the whole text, delimiters and health footer included, so none of the bridge's sanitising applies. It is a direct prompt-injection channel into the 06:52 digest, and the digest's own guardrails (content treated as data, single recipient, no link-following, read-only) are the only defence.
 
@@ -142,6 +146,7 @@ A fake feed matters more than it sounds: the attacker writes the whole text, del
 | Malicious or compromised dependency | Go + whatsmeow, versions pinned in `go.sum`; build reproducibly; review diffs before any upgrade; no npm |
 | Stolen webhook URL and secret | Worst case is a fake WA-FEED email to the owner whose entire text the attacker writes, bypassing the bridge's sanitising: the script can only email its owner, from its owner. The digest trusts only feeds carrying the SENT label, treats content as data and never acts on instructions in it. Rotate by changing the script property and the Pi's secret file |
 | Prompt injection via group messages | Feed is plain text with sanitised delimiters; the digest treats it as data and flags any instruction it finds |
+| Monitoring number added to a group by a stranger (spam, scams, injection text), which all-groups mode would read | "Who can add me to groups" set to "My contacts" in the monitoring account, which has no contacts, so every add becomes an invite only the owner can accept; leave or `exclude_groups` anything unwanted; private chats are never read |
 | Lateral movement from other Pi services | Runs in its own container (or systemd sandbox: `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, read-write only on its data dir) |
 | Data hoarding | 48-hour message retention, text only; the monitoring account has no saved contacts; `session.db` holds only what whatsmeow needs and is protected as a credential; both databases deleted on uninstall |
 
@@ -153,7 +158,9 @@ feedbridge opens no inbound port, and nothing on the Pi is reachable from the LA
 
 | Key | Example | Notes |
 | --- | --- | --- |
-| `whatsapp.groups` | `["120363012345678901@g.us", "120363098765432109@g.us"]` | Group JIDs from `--list-groups`; headings use each group's current name |
+| `whatsapp.all_groups` | `true` | Watch every group the number is in; `whatsapp.groups` must then be empty |
+| `whatsapp.exclude_groups` | `["120363098765432109@g.us"]` | All-groups mode only: joined groups to leave out, by JID |
+| `whatsapp.groups` | `["120363012345678901@g.us", "120363098765432109@g.us"]` | Listed mode only: group JIDs from `--list-groups`; headings use each group's current name |
 | `whatsapp.session_db` | `/var/lib/feedbridge/session.db` | whatsmeow SQLite store; treat as a credential |
 | `store.path` | `/var/lib/feedbridge/messages.db` | Message SQLite |
 | `store.retention_hours` | `48` | Purged on every run |
@@ -184,11 +191,11 @@ Secrets live in separate files, never in the TOML, so the config can be shown or
 ### One-time setup
 
 1. **Monitoring number.** Buy a pay-as-you-go SIM and add it to the owner's phone as a second SIM or eSIM.
-2. **Second WhatsApp account.** In ordinary WhatsApp on the owner's Android phone, go to Settings > the arrow next to their name > Add account, and register the new number. Turn on two-step verification with a PIN. the owner's phone is the primary device; their personal account is untouched. WhatsApp Business is not needed. Switch to the monitoring account about once a week, so Android doesn't restrict it in the background and it stays well inside the 14-day rule.
-3. **Join the groups.** Ask each group admin to add the monitoring number. No announcement is made to the groups (see Decisions). Then mute and archive both groups in the monitoring account on the owner's phone, and never open them there: WhatsApp sends read receipts in groups even with read receipts turned off, so opening them would show other members blue ticks from the monitoring number. Reading on the phone doesn't stop the Pi getting its own copy; it's only about the ticks.
+2. **Second WhatsApp account.** In ordinary WhatsApp on the owner's Android phone, go to Settings > the arrow next to their name > Add account, and register the new number. Turn on two-step verification with a PIN, and set Settings > Privacy > Groups to "My contacts" (the account has no contacts, so every group add becomes an invite the owner accepts; all-groups mode depends on this). The owner's phone is the primary device; their personal account is untouched. WhatsApp Business is not needed. Switch to the monitoring account about once a week, so Android doesn't restrict it in the background and it stays well inside the 14-day rule.
+3. **Join the groups.** Ask each group admin to add the monitoring number, then accept the invite on the phone; in all-groups mode, accepting is what puts a group in the feed. No announcement is made to the groups (see Decisions). Then mute and archive each group in the monitoring account on the owner's phone, and never open them there: WhatsApp sends read receipts in groups even with read receipts turned off, so opening them would show other members blue ticks from the monitoring number. Reading on the phone doesn't stop the Pi getting its own copy; it's only about the ticks.
 4. **Apps Script.** At script.google.com, signed in as the owner, create a project and paste the Appendix code. In Project Settings > Script properties, set `FEED_SECRET` to the output of `openssl rand -hex 32`. Deploy > New deployment > Web app, with Execute as: Me and Who has access: Anyone. Authorise it once (click through the "unverified app" warning, since it's your own script). Save the `/exec` URL to `webhook.url` and the secret to `webhook.secret`.
 5. **Install.** Build the binary (see Runtime isolation), copy it to `/usr/local/bin`, create the user and directories, write the config and secrets, install `feedbridge.service` and `feedbridge.timer`.
-6. **Link.** Run `sudo -u feedbridge feedbridge --link` and scan the QR from Linked devices in the monitoring account. Then run `sudo -u feedbridge feedbridge --list-groups` and copy the two group JIDs into the config.
+6. **Link.** Run `sudo -u feedbridge feedbridge --link` and scan the QR from Linked devices in the monitoring account. Then set `all_groups = true` (`sudo deploy/start.sh --all` does it), or, to watch only some groups, run `sudo -u feedbridge feedbridge --list-groups` and copy their JIDs into `whatsapp.groups`.
 7. **Start.** `systemctl enable --now feedbridge.timer`, then `systemctl start feedbridge` to run once now and confirm a WA-FEED email arrives.
 8. **Soak test.** Run the one-week soak test (acceptance test 23) before relying on the feed.
 
@@ -200,12 +207,17 @@ Every feed email ends with a health footer, so the 06:52 digest can tell "nothin
 
 ```
 --- feedbridge health ---
-whatsapp: synced 06:31 (34 new) | groups: 2/2 found
+whatsapp: synced 06:31 (34 new) | groups: all, 2 joined
 store: 37 messages in window, oldest Sun 25 Oct 06:40
 version: 1.0.0
 ```
 
-The first line is one of:
+The first line is one of the WhatsApp states below, followed by a groups part:
+
+- All-groups mode: `groups: all, <n> joined` (the groups watched, after exclusions), plus `, <m> excluded` when `exclude_groups` leaves any out; `groups: all, not checked` when WhatsApp was unavailable or the group list failed.
+- Listed mode: `groups: <found>/<listed> found`, plus `(missing: <JIDs>)` for listed groups the number is not in.
+
+The WhatsApp state is one of:
 
 - `whatsapp: synced <HH:MM> (<n> new)`: the sync completed.
 - `whatsapp: PARTIAL — sync timed out after <timeout> (<n> new)`: connected, but `OfflineSyncCompleted` never came; anything missed arrives next day as `(late)`.
@@ -222,7 +234,8 @@ For `PARTIAL` or `NOT SYNCED`, the digest prompt shows one "WhatsApp feed not fu
 | Pi offline at 06:30 | No WA-FEED email | Digest reports "feed not received" | `Persistent=true` runs the missed run at boot; it covers everything since the last send (up to 48 h) |
 | Messages arrive after the run disconnects | None needed | Held on WhatsApp's server | Next day's feed, marked `(late)` |
 | Group renamed | Groups are configured by JID | Keeps working; heading and footer show the new name | None |
-| Monitoring number removed from a group | `groups: 1/2 found` | Footer flags the missing group | Ask the admin to re-add |
+| Monitoring number removed from a group | Listed mode: `groups: 1/2 found`. All-groups mode: the `joined` count drops (the bridge can't tell a removal from a deliberate leave) | Listed mode flags the missing group; messages already stored still go out | Ask the admin to re-add |
+| Monitoring number in an unwanted group (all-groups mode) | Unexpected heading in the feed, or a higher `joined` count | Its messages go into the feed like any other group's | Leave the group, or add its JID to `exclude_groups`; check the "My contacts" group setting is still on |
 | Account banned or flagged | Connect failure with a ban code | Footer says `NOT SYNCED — BANNED`; the run doesn't retry the connection | Decide whether to appeal or drop WhatsApp (see Risks) |
 | Webhook failure | Response not `ok`, timeout or redirect error | Retry 3 times over 15 minutes with the same `id`, then log; `last_sent_at` is not advanced, so the next feed includes these messages | Check the script deployment is live and the secret matches; a new deployment gives a new URL |
 | Script's Google authorisation revoked | Response is an error or sign-in page | As above | Open the script and authorise it again |
@@ -239,7 +252,7 @@ When whatsmeow needs a fix, or for any other change: update and review the pinne
 ### Acceptance tests
 
 1. A text message posted in each watched group appears in the next feed under the right `===== GROUP: <name> =====` heading.
-2. A message in any other chat on the monitoring number never appears in the store (check with `sqlite3 messages.db`).
+2. A private message to the monitoring number, a status update and a broadcast-list message never appear in the store, in either mode; in listed mode, neither does a message in an unlisted group; in all-groups mode, neither does a message in an excluded group (check with `sqlite3 messages.db`).
 3. A photo with a caption appears as `[image] <caption>`; a photo with no caption appears as `[image]`; no media file is ever written to disk.
 4. A reply shows the quoted sender and the first ~40 characters of the quoted message.
 5. A poll shows only its question, with no options or vote counts; an edited message shows only its latest text, marked `(edited)`; a message deleted for everyone does not appear. Editing a message that went out in an earlier feed puts it in the next feed, under its original time, marked `(edited)` and not `(late)`.
@@ -255,12 +268,13 @@ When whatsmeow needs a fix, or for any other change: update and review the pinne
 15. Two POSTs with the same `id` produce one email, and both get `ok`. If the script answers anything but `ok`, the next day's feed includes the failed day's messages and no message appears in two feeds.
 16. After a group is renamed, its messages still appear, under the new name.
 17. Log the bridge out, post in a watched group, re-link: the next feed includes that message, marked `(late)`, exactly once.
-18. After linking, nothing from chats outside the watched groups, and nothing posted more than 48 hours earlier, is in `messages.db`, even though history sync delivered it.
+18. After linking, nothing from private chats or groups that aren't watched, and nothing posted more than 48 hours earlier, is in `messages.db`, even though history sync delivered it.
 19. Running `--list-groups` while a run is in progress exits with "run in progress" and doesn't disturb the run.
 20. A message the owner deletes "for me" in a watched group on their phone still appears in the feed; one its sender deletes for everyone does not.
 21. An edit to a message posted three days earlier appears in the next feed, marked `(edited)`.
 22. With the digest prompt updated: no feed gives a "not received" row; after a manual run the previous afternoon, the digest reads both that feed and the 06:30 one; a `NOT SYNCED` footer gives a "not fully checked" row; a WA-FEED email from any other address is ignored.
-23. **One-week soak test** (first, before relying on the feed): for 7 days, compare each feed with the two groups on the owner's phone. Every message appears exactly once (late ones marked), no day shows `PARTIAL`, and other members' messages reach two grey ticks during the day as normal.
+23. **One-week soak test** (first, before relying on the feed): for 7 days, compare each feed with the watched groups on the owner's phone. Every message appears exactly once (late ones marked), no day shows `PARTIAL`, and other members' messages reach two grey ticks during the day as normal.
+24. **All-groups mode:** with `all_groups = true`, a group the monitoring number joins appears in the next feed under its own name with no config change, and the footer's `joined` count goes up by one; after leaving it, or adding its JID to `exclude_groups`, its new messages stop appearing. Someone who is not a contact of the monitoring account trying to add it to a group produces only an invite, and nothing from that group is stored unless the invite is accepted.
 
 ## Risks, open questions and decisions
 
@@ -273,7 +287,8 @@ When whatsmeow needs a fix, or for any other change: update and review the pinne
 | whatsmeow breaks after a WhatsApp protocol change | Medium, a few times a year | Feed gaps until updated | Footer shows `NOT SYNCED`; rebuild with the latest whatsmeow from a pinned, reviewed version |
 | WhatsApp drops or caps a linked device's queued messages between runs (unverified) | Low | Messages silently missing from the feed | Soak test (acceptance test 23); if seen, go back to a long-running service |
 | Other members' messages stay at one grey tick until the run (unverified; only if the monitoring account's phone is offline) | Low | Social awkwardness | Keep the monitoring account on an always-online phone; checked in the soak test |
-| Session file stolen from the Pi | Low | Attacker reads the two groups as the monitoring number | Only two groups on that number; 0600 perms, dedicated user, VPN-only access; revoke from Linked devices |
+| Session file stolen from the Pi | Low | Attacker reads every group the monitoring number is in | Only the owner's chosen groups on that number, no private chats in use; 0600 perms, dedicated user, VPN-only access; revoke from Linked devices |
+| Monitoring number ends up in an unwanted group (all-groups mode) | Low with the "My contacts" setting | Spam or injection text reaches the digest | "My contacts" group setting turns every add into an invite; leave or `exclude_groups`; digest treats content as data |
 | Webhook URL and secret leaked | Low | Fully attacker-written WA-FEED emails reach the digest, bypassing the bridge's sanitising | Secret check; script only emails its owner; digest treats content as data; rotate the secret |
 | Google changes Apps Script web apps or quotas | Low | Feed not delivered | Digest reports "feed not received"; fall back to sending from a dedicated Gmail account |
 | Supply-chain compromise in a Go dependency | Low | Code runs with feedbridge's limited rights | Pinned go.sum, few deps, sandboxed unit, no inbound ports |
@@ -286,6 +301,7 @@ When whatsmeow needs a fix, or for any other change: update and review the pinne
 ### Decisions
 
 - **Separate monitoring number**, not the owner's personal WhatsApp, so a ban or leak can't touch their own account.
+- **All groups, never private chats** (Oct 31, 2026): the bridge reads every group the monitoring number is in, so joining a group is enough to add it, with no config change. Private chats, broadcast lists, status updates and channels are never read, because they are what people least expect to be stored or emailed. This is only safe because the "My contacts" group setting means the owner chooses every group. Listed mode (`whatsapp.groups`) stays available.
 - **No announcement to the groups.** The monitoring number joins like any other member; the owner explains it if anyone asks. The bridge only keeps 48 hours of messages, for the owner's own reminders.
 - **Monitoring account on the owner's own phone**, not a spare: the phone is always online, so the link never hits the 14-day limit and other members' messages get normal delivery ticks.
 - **Ordinary WhatsApp, not Business.** The monitoring number is a second account in the normal WhatsApp app, so it looks like a regular member in the groups rather than a business profile.

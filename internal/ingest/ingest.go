@@ -38,15 +38,26 @@ type Names interface {
 
 type Filter struct {
 	Groups    map[types.JID]bool
+	All       bool               // every group chat, not just Groups
+	Exclude   map[types.JID]bool // never watched, even with All
 	Retention time.Duration
 	Now       func() time.Time
+}
+
+// Watched reports whether chat is a group the bridge reads. Private chats,
+// broadcast lists, status updates and channels never are.
+func (f Filter) Watched(chat types.JID) bool {
+	if chat.Server != types.GroupServer || f.Exclude[chat] {
+		return false
+	}
+	return f.All || f.Groups[chat]
 }
 
 const snippetRunes = 40
 
 // FromMessage classifies one event; ok is false when it must be dropped.
 func FromMessage(evt *events.Message, f Filter, n Names) (Op, bool) {
-	if evt == nil || !evt.Info.IsGroup || !f.Groups[evt.Info.Chat] {
+	if evt == nil || !evt.Info.IsGroup || !f.Watched(evt.Info.Chat) {
 		return Op{}, false
 	}
 	if evt.Message == nil && evt.RawMessage != nil {
@@ -232,7 +243,7 @@ func FromHistory(evt *events.HistorySync, f Filter, n Names,
 	var ops []Op
 	for _, c := range evt.Data.GetConversations() {
 		chat, err := types.ParseJID(c.GetID())
-		if err != nil || !f.Groups[chat] {
+		if err != nil || !f.Watched(chat) {
 			continue
 		}
 		var evs []*events.Message

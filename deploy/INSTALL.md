@@ -11,8 +11,9 @@ Two scripts do the `sudo` work in the sections below. Read them first.
 ```sh
 sudo deploy/setup.sh                          # sections 2-4; prints the secret for Apps Script, asks for the /exec URL
 sudo -u feedbridge feedbridge --link          # section 5: scan the QR in the monitoring account
-sudo -u feedbridge feedbridge --list-groups   # find the two group JIDs
+sudo -u feedbridge feedbridge --list-groups   # find the group JIDs
 sudo deploy/start.sh <JID1> <JID2>            # writes the JIDs, enables the timer, runs once
+#   or: sudo deploy/start.sh --all            # every joined group instead (see section 7)
 ```
 
 Then do section 7 on the phone. The sections below are the same steps by hand.
@@ -58,7 +59,7 @@ sudoedit /etc/feedbridge/webhook.secret
 `--link` and `--list-groups` load and validate the whole config, so
 `webhook.url` and `webhook.secret` must already be filled in before step 5.
 `whatsapp.groups` may be empty (`groups = []`) until after `--list-groups`;
-only `--run` refuses an empty list.
+only `--run` refuses an empty list, unless `all_groups = true`.
 
 ## 4. systemd units (setup step 5)
 
@@ -95,8 +96,10 @@ WhatsApp drops history from before a first link; this is accepted.
 sudo -u feedbridge feedbridge --list-groups
 ```
 
-Copy the two group JIDs into `whatsapp.groups` in `/etc/feedbridge/config.toml`
-(`sudoedit`), replacing the placeholders.
+Copy the group JIDs into `whatsapp.groups` in `/etc/feedbridge/config.toml`
+(`sudoedit`), replacing the placeholders. Or, to take every group the
+monitoring number is in, set `groups = []` and `all_groups = true`, and list
+any groups to leave out in `exclude_groups`.
 
 ## 6. Start (setup step 7)
 
@@ -110,5 +113,10 @@ Confirm a WA-FEED email arrives and the health footer says `whatsapp: synced`.
 
 ## 7. On the phone
 
-Mute and archive both groups in the monitoring account and never open them
-there: WhatsApp sends read receipts in groups even with read receipts off.
+Mute and archive the watched groups in the monitoring account and never open
+them there: WhatsApp sends read receipts in groups even with read receipts off.
+
+With `all_groups = true`, also set Settings > Privacy > Groups to
+**My contacts** in the monitoring account. It has no saved contacts, so
+nobody can add it to a group directly: each add becomes an invite you accept
+on the phone, and accepting it is what puts the group in the feed.

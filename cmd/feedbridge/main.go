@@ -1,4 +1,4 @@
-// Command feedbridge collects two WhatsApp groups' messages once a day and
+// Command feedbridge collects WhatsApp group messages once a day and
 // posts them as a plain-text feed to an Apps Script webhook.
 package main
 
@@ -76,8 +76,8 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if *doRun && len(cfg.Groups) == 0 {
-		fmt.Fprintln(stderr, "whatsapp.groups: no groups configured; run --list-groups and add their JIDs")
+	if *doRun && len(cfg.Groups) == 0 && !cfg.AllGroups {
+		fmt.Fprintln(stderr, "whatsapp.groups: no groups configured; run --list-groups and add their JIDs, or set all_groups = true")
 		return exitUsage
 	}
 
@@ -194,5 +194,6 @@ func (f failedWA) Connect(context.Context) error { return f.err }
 func (f failedWA) WaitSynced(context.Context, time.Duration) run.SyncResult {
 	return run.SyncResult{}
 }
-func (f failedWA) GroupName(context.Context, string) (string, error) { return "", f.err }
-func (f failedWA) Disconnect()                                       {}
+func (f failedWA) GroupName(context.Context, string) (string, error)     { return "", f.err }
+func (f failedWA) JoinedGroups(context.Context) ([]run.GroupInfo, error) { return nil, f.err }
+func (f failedWA) Disconnect()                                           {}
