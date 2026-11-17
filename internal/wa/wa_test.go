@@ -175,6 +175,63 @@ func TestLoggerRedactsStrings(t *testing.T) {
 	}
 }
 
+func TestWaitHistoryStopsWhenQuiet(t *testing.T) {
+	c, _ := newTestClient(t)
+	c.onHistory = func(*events.HistorySync) {}
+	c.syncTimeout, c.linkIdle = time.Hour, 150*time.Millisecond
+
+	// Batches 50 ms apart keep it waiting; it stops linkIdle after the last.
+	go func() {
+		for i := 0; i < 4; i++ {
+			c.handle(&events.HistorySync{})
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+	var out bytes.Buffer
+	start := time.Now()
+	if err := c.waitHistory(context.Background(), &out); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	if took < 300*time.Millisecond || took > 2*time.Second {
+		t.Errorf("returned after %v, want about 350ms (last batch + idle)", took)
+	}
+	if n := strings.Count(out.String(), "History batch received"); n < 2 {
+		t.Errorf("progress lines = %d, want several:\n%s", n, out.String())
+	}
+	if !strings.Contains(out.String(), "No more history") {
+		t.Errorf("missing idle message:\n%s", out.String())
+	}
+}
+
+func TestWaitHistoryStopsAtLimit(t *testing.T) {
+	c, _ := newTestClient(t)
+	c.onHistory = func(*events.HistorySync) {}
+	c.syncTimeout, c.linkIdle = 200*time.Millisecond, time.Hour
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() { // a steady trickle never lets the idle timer fire
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(20 * time.Millisecond):
+				c.handle(&events.HistorySync{})
+			}
+		}
+	}()
+	var out bytes.Buffer
+	start := time.Now()
+	c.waitHistory(context.Background(), &out)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("ignored the overall limit: %v", took)
+	}
+	if !strings.Contains(out.String(), "Stopped after 200ms") {
+		t.Errorf("missing limit message:\n%s", out.String())
+	}
+}
+
 func TestCloseWaitsForHistorySync(t *testing.T) {
 	c, _ := newTestClient(t)
 	started := make(chan struct{})

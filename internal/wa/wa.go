@@ -72,6 +72,8 @@ type Client struct {
 	// History syncs are downloaded and applied on whatsmeow's own goroutine,
 	// which can outlive Disconnect; Close waits for them (up to closeWait).
 	onHistory   func(*events.HistorySync) // default c.handleHistory; replaced in tests
+	histDone    chan struct{}             // one value per applied history batch, for Link's progress
+	linkIdle    time.Duration             // Link stops this long after the last history batch
 	closeWait   time.Duration
 	histMu      sync.Mutex
 	histClosed  bool
@@ -124,6 +126,8 @@ func New(ctx context.Context, cfg config.Config, st *fbstore.Store) (*Client, er
 		connected:   make(chan struct{}),
 		fatal:       make(chan struct{}),
 		closeWait:   30 * time.Second,
+		histDone:    make(chan struct{}, 1),
+		linkIdle:    30 * time.Second,
 	}
 	c.onHistory = c.handleHistory
 	cli.AddEventHandler(c.handle)
@@ -180,6 +184,10 @@ func (c *Client) handle(evt any) {
 		c.histMu.Unlock()
 		defer func() { c.histPending.Add(-1); c.histWG.Done() }()
 		c.onHistory(e)
+		select {
+		case c.histDone <- struct{}{}:
+		default: // Link is not waiting, or already has a batch to report
+		}
 	case *events.OfflineSyncCompleted:
 		c.log.Info("offline sync completed", "count", e.Count)
 		c.syncedOnce.Do(func() { close(c.synced) })
@@ -335,8 +343,8 @@ func (c *Client) Disconnect() {
 }
 
 // Link pairs a new companion device: it prints QR codes to out until one is
-// scanned, then stays connected for the sync timeout so the phone's history
-// sync is stored, and disconnects. With phone set (international format,
+// scanned, then stays connected until the phone's history sync has gone
+// quiet (see waitHistory) so it is stored, and disconnects. With phone set (international format,
 // digits only), it prints a pairing code to type on the phone instead.
 func (c *Client) Link(ctx context.Context, out io.Writer, phone string) error {
 	if c.cli.Store.ID != nil {
@@ -382,16 +390,35 @@ func (c *Client) Link(ctx context.Context, out io.Writer, phone string) error {
 	if !paired {
 		return errors.New("link: QR channel closed before pairing")
 	}
-	fmt.Fprintf(out, "Linked. Receiving history for up to %s...\n", c.syncTimeout)
-	t := time.NewTimer(c.syncTimeout)
-	defer t.Stop()
-	select {
-	case <-t.C:
-	case <-ctx.Done():
-	case <-c.fatal:
-		return c.fatalErr
+	fmt.Fprintf(out, "Linked. Receiving history (stops %s after the last batch, at most %s)...\n", c.linkIdle, c.syncTimeout)
+	return c.waitHistory(ctx, out)
+}
+
+// waitHistory returns once no history batch has arrived for linkIdle, or
+// after syncTimeout in all. WhatsApp sends no "history complete" signal, so
+// a quiet spell is the best sign that the phone has sent everything.
+func (c *Client) waitHistory(ctx context.Context, out io.Writer) error {
+	limit := time.NewTimer(c.syncTimeout)
+	defer limit.Stop()
+	idle := time.NewTimer(c.linkIdle)
+	defer idle.Stop()
+	for {
+		select {
+		case <-c.histDone:
+			fmt.Fprintf(out, "History batch received (%d messages stored so far).\n", c.applied.Load())
+			idle.Reset(c.linkIdle)
+		case <-idle.C:
+			fmt.Fprintf(out, "No more history for %s. Done.\n", c.linkIdle)
+			return nil
+		case <-limit.C:
+			fmt.Fprintf(out, "Stopped after %s. Done.\n", c.syncTimeout)
+			return nil
+		case <-ctx.Done():
+			return nil
+		case <-c.fatal:
+			return c.fatalErr
+		}
 	}
-	return nil
 }
 
 // JoinedGroups lists the groups the linked number is in. Call after Connect.
