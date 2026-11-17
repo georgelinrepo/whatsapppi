@@ -90,6 +90,15 @@ sudo -u feedbridge feedbridge --link
 ```
 
 Scan the QR code in the monitoring account: Linked devices > Link a device.
+Or, to type a code on the phone instead of scanning, add the monitoring
+number in international format (digits only):
+
+```sh
+sudo -u feedbridge feedbridge --link --phone 447700900123
+```
+
+and in Link a device, tap "Link with phone number instead" and enter the
+8-character code within about 2 minutes.
 WhatsApp drops history from before a first link; this is accepted.
 
 ```sh

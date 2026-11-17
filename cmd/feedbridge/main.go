@@ -48,6 +48,7 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 	cfgPath := fs.String("config", "/etc/feedbridge/config.toml", "config file")
 	doRun := fs.Bool("run", false, "collect messages and send the daily feed")
 	doLink := fs.Bool("link", false, "link as a companion device by QR code")
+	phone := fs.String("phone", "", "with --link: the monitoring number in international format (e.g. 447700900123); shows a pairing code instead of a QR code")
 	doList := fs.Bool("list-groups", false, "print each joined group's JID and name")
 	doVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
@@ -64,7 +65,15 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if modes != 1 || fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: feedbridge [--config path] --run | --link | --list-groups | --version")
+		fmt.Fprintln(stderr, "usage: feedbridge [--config path] --run | --link [--phone number] | --list-groups | --version")
+		return exitUsage
+	}
+	if *phone != "" && !*doLink {
+		fmt.Fprintln(stderr, "--phone is only used with --link")
+		return exitUsage
+	}
+	if *phone != "" && !validPhone(*phone) {
+		fmt.Fprintln(stderr, "--phone: use international format, digits only, e.g. 447700900123 (no + or leading 0)")
 		return exitUsage
 	}
 
@@ -107,7 +116,7 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 	case *doRun:
 		return runFeed(ctx, cfg, st, log)
 	case *doLink:
-		return link(ctx, cfg, st, stdout, log)
+		return link(ctx, cfg, st, stdout, log, *phone)
 	default:
 		return listGroups(ctx, cfg, st, stdout, stderr, log)
 	}
@@ -135,14 +144,28 @@ func runFeed(ctx context.Context, cfg config.Config, st *store.Store, log *slog.
 	return exitOK
 }
 
-func link(ctx context.Context, cfg config.Config, st *store.Store, stdout io.Writer, log *slog.Logger) int {
+// validPhone accepts an international number as digits only: no +, no
+// leading 0, 7 to 15 digits (E.164).
+func validPhone(s string) bool {
+	if len(s) < 7 || len(s) > 15 || s[0] == '0' {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func link(ctx context.Context, cfg config.Config, st *store.Store, stdout io.Writer, log *slog.Logger, phone string) int {
 	c, err := wa.New(ctx, cfg, st)
 	if err != nil {
 		log.Error("whatsapp client", "err", err)
 		return exitFail
 	}
 	defer c.Close()
-	if err := c.Link(ctx, stdout); err != nil {
+	if err := c.Link(ctx, stdout, phone); err != nil {
 		log.Error("link", "err", err)
 		return exitFail
 	}

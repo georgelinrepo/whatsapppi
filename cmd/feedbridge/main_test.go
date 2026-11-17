@@ -39,7 +39,9 @@ func TestVersionNeedsNoConfig(t *testing.T) {
 }
 
 func TestUsageErrors(t *testing.T) {
-	for _, args := range [][]string{{}, {"--run", "--link"}, {"--bogus"}, {"--run", "extra"}} {
+	for _, args := range [][]string{{}, {"--run", "--link"}, {"--bogus"}, {"--run", "extra"},
+		{"--run", "--phone", "447700900123"}, {"--link", "--phone", "07700900123"},
+		{"--link", "--phone", "+447700900123"}, {"--link", "--phone", "12345"}} {
 		var out, errb bytes.Buffer
 		if code := realMain(args, &out, &errb); code != 2 {
 			t.Errorf("%v: exit %d, want 2", args, code)

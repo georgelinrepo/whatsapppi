@@ -336,8 +336,9 @@ func (c *Client) Disconnect() {
 
 // Link pairs a new companion device: it prints QR codes to out until one is
 // scanned, then stays connected for the sync timeout so the phone's history
-// sync is stored, and disconnects.
-func (c *Client) Link(ctx context.Context, out io.Writer) error {
+// sync is stored, and disconnects. With phone set (international format,
+// digits only), it prints a pairing code to type on the phone instead.
+func (c *Client) Link(ctx context.Context, out io.Writer, phone string) error {
 	if c.cli.Store.ID != nil {
 		return errors.New("already linked; remove the session database to link again")
 	}
@@ -349,12 +350,23 @@ func (c *Client) Link(ctx context.Context, out io.Writer) error {
 		return err
 	}
 	defer c.Disconnect()
-	paired := false
+	paired, codeShown := false, false
 	for item := range qr {
 		switch item.Event {
 		case "code":
-			qrterminal.GenerateHalfBlock(item.Code, qrterminal.L, out)
-			fmt.Fprintln(out, "Scan in WhatsApp > Linked devices > Link a device.")
+			if phone == "" {
+				qrterminal.GenerateHalfBlock(item.Code, qrterminal.L, out)
+				fmt.Fprintln(out, "Scan in WhatsApp > Linked devices > Link a device.")
+			} else if !codeShown {
+				// The first QR event means the connection is ready for a pairing code.
+				code, err := c.cli.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+				if err != nil {
+					return fmt.Errorf("link: pairing code: %w", err)
+				}
+				codeShown = true
+				fmt.Fprintf(out, "Pairing code: %s\n", code)
+				fmt.Fprintln(out, "In WhatsApp > Linked devices > Link a device, tap \"Link with phone number instead\" and enter it within 2 minutes.")
+			}
 		case whatsmeow.QRChannelSuccess.Event:
 			paired = true
 		default:
